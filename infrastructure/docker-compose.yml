@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: worktrack-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: worktrack
+      POSTGRES_PASSWORD: worktrack
+      POSTGRES_DB: worktrack
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../backend/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U worktrack -d worktrack"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.backend
+    container_name: worktrack-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://worktrack:worktrack@postgres:5432/worktrack?sslmode=disable
+      ENVIRONMENT: development
+      LOG_LEVEL: debug
+      JWT_SECRET: dev_secret_must_be_at_least_32_chars_long
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.dashboard
+    container_name: worktrack-dashboard
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8080
+
+volumes:
+  postgres_data:

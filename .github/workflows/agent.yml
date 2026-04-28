@@ -1,0 +1,84 @@
+name: Agent CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - ".github/workflows/agent.yml"
+  pull_request:
+    paths:
+      - "agent/**"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag (e.g. v0.1.0). Leave empty for non-release build."
+        required: false
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: agent/go.sum
+
+      - name: Vet
+        working-directory: agent
+        run: go vet ./...
+
+      - name: Test
+        working-directory: agent
+        run: go test -race -cover ./...
+
+  build:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build
+        working-directory: agent
+        env:
+          VERSION: ${{ github.event.inputs.release_tag || github.sha }}
+        run: |
+          go build `
+            -ldflags="-s -w -X main.Version=$env:VERSION" `
+            -o bin/worktrack-agent.exe ./cmd/agent
+
+      - name: Compute hashes
+        working-directory: agent
+        run: |
+          Get-FileHash bin/worktrack-agent.exe -Algorithm SHA256 | Format-List
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worktrack-agent-${{ github.sha }}
+          path: agent/bin/worktrack-agent.exe
+          retention-days: 30
+
+  # === Release pipeline (manual trigger) ===
+  # 1. Sign with EV cert (hardware token via SignPath/Azure Trusted Signing)
+  # 2. Submit to VirusTotal API for clean check
+  # 3. Submit to Microsoft Defender Submission Portal
+  # 4. Wait for analysis
+  # 5. Upload signed artifact to release page
+
+  sign:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != ''
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: worktrack-agent-${{ github.sha }}
+          path: ./
+      # TODO: integrate with SignPath / Azure Trusted Signing here
+      - name: Sign placeholder
+        run: |
+          Write-Host "EV signing step — wire up to provider when EV cert is provisioned."

@@ -1,0 +1,200 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+)
+
+const (
+	headerAgentToken = "X-Agent-Token"
+	userAgent        = "WorkTrack-Agent"
+)
+
+var (
+	ErrUnauthorized = errors.New("agent token rejected")
+	ErrServerError  = errors.New("server error")
+)
+
+type Client struct {
+	baseURL    string
+	authToken  string
+	version    string
+	httpClient *http.Client
+}
+
+func NewClient(baseURL, authToken, version string) *Client {
+	return &Client{
+		baseURL:   strings.TrimRight(baseURL, "/"),
+		authToken: authToken,
+		version:   version,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+func (c *Client) SetAuthToken(token string) {
+	c.authToken = token
+}
+
+func (c *Client) doJSON(ctx context.Context, method, path string, body, out any) error {
+	u, err := url.JoinPath(c.baseURL, path)
+	if err != nil {
+		return fmt.Errorf("build url: %w", err)
+	}
+
+	var bodyReader io.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("marshal body: %w", err)
+		}
+		bodyReader = bytes.NewReader(buf)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, u, bodyReader)
+	if err != nil {
+		return fmt.Errorf("new request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", fmt.Sprintf("%s/%s", userAgent, c.version))
+	if c.authToken != "" {
+		req.Header.Set(headerAgentToken, c.authToken)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return ErrUnauthorized
+	}
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("%w: status %d", ErrServerError, resp.StatusCode)
+	}
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("client error: status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+	}
+	return nil
+}
+
+// === Request/Response types ===
+
+type RegisterInfo struct {
+	Hostname     string `json:"hostname"`
+	OSVersion    string `json:"os_version"`
+	OSBuild      string `json:"os_build"`
+	CPUModel     string `json:"cpu_model"`
+	RAMTotalMB   int64  `json:"ram_total_mb"`
+	Timezone     string `json:"timezone"`
+	Locale       string `json:"locale"`
+	AgentVersion string `json:"agent_version"`
+}
+
+type RegisterRequest struct {
+	OnboardingCode string       `json:"onboarding_code"`
+	Info           RegisterInfo `json:"info"`
+}
+
+type RegisterResponse struct {
+	MachineID string `json:"machine_id"`
+	AuthToken string `json:"auth_token"`
+}
+
+type HeartbeatRequest struct {
+	AgentVersion string `json:"agent_version"`
+	CPUPercent   *int16 `json:"cpu_percent,omitempty"`
+	RAMUsedMB    *int64 `json:"ram_used_mb,omitempty"`
+}
+
+type HeartbeatResponse struct {
+	Acknowledged   bool   `json:"acknowledged"`
+	NextPollMs     int    `json:"next_poll_ms"`
+	HasCommands    bool   `json:"has_commands"`
+	UpdateVersion  string `json:"update_version,omitempty"`
+	UpdateDownload string `json:"update_download,omitempty"`
+}
+
+type EventInput struct {
+	EventType      string          `json:"event_type"`
+	OccurredAt     time.Time       `json:"occurred_at"`
+	WindowsEventID *int            `json:"windows_event_id,omitempty"`
+	UserName       *string         `json:"user_name,omitempty"`
+	Metadata       json.RawMessage `json:"metadata,omitempty"`
+}
+
+type EventBatch struct {
+	Events []EventInput `json:"events"`
+}
+
+type CommandDispatch struct {
+	ID             string   `json:"id"`
+	ScriptContent  string   `json:"script_content"`
+	ScriptArgs     []string `json:"script_args,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+}
+
+type CommandPollResponse struct {
+	Commands []CommandDispatch `json:"commands"`
+}
+
+type CommandResultRequest struct {
+	ExitCode  int       `json:"exit_code"`
+	Stdout    string    `json:"stdout"`
+	Stderr    string    `json:"stderr"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at"`
+}
+
+// === API methods ===
+
+func (c *Client) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {
+	var resp RegisterResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agent/register", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) (*HeartbeatResponse, error) {
+	var resp HeartbeatResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agent/heartbeat", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) SubmitEvents(ctx context.Context, batch EventBatch) error {
+	return c.doJSON(ctx, http.MethodPost, "/api/v1/agent/events", batch, nil)
+}
+
+func (c *Client) PollCommands(ctx context.Context) ([]CommandDispatch, error) {
+	var resp CommandPollResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/agent/commands", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Commands, nil
+}
+
+func (c *Client) SubmitCommandResult(ctx context.Context, commandID string, result CommandResultRequest) error {
+	path := fmt.Sprintf("/api/v1/agent/commands/%s/result", commandID)
+	return c.doJSON(ctx, http.MethodPost, path, result, nil)
+}
