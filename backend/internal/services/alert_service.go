@@ -41,7 +41,7 @@ func (s *AlertService) ScanOfflineMachines(ctx context.Context, thresholdHours i
 		FROM machines m
 		WHERE m.disabled_at IS NULL
 		  AND m.last_seen_at IS NOT NULL
-		  AND m.last_seen_at < NOW() - ($1 || ' hours')::interval
+		  AND m.last_seen_at < NOW() - make_interval(hours => $1)
 		  AND NOT EXISTS (
 		      SELECT 1 FROM alerts a
 		      WHERE a.machine_id = m.id
