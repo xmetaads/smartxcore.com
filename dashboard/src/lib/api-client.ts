@@ -1,6 +1,9 @@
 import { useAuthStore } from "./auth-store";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
+// Empty default = same-origin (correct for production where dashboard and
+// backend share a domain via nginx). Dev sets this to http://localhost:8080
+// in dashboard/.env.development.
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 export class APIError extends Error {
   constructor(
