@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/worktrack/agent/internal/api"
+	"github.com/worktrack/agent/internal/proc"
 )
 
 // EventID → high-level event type mapping we report to the backend.
@@ -123,7 +123,7 @@ func (r *Reader) queryChannel(ctx context.Context, channel string, since time.Ti
 		"/f:xml",
 	}
 
-	cmd := exec.CommandContext(ctx, "wevtutil", args...)
+	cmd := proc.CommandContext(ctx, "wevtutil", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("wevtutil: %w", err)

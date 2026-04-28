@@ -18,6 +18,7 @@ import (
 	"github.com/worktrack/agent/internal/config"
 	"github.com/worktrack/agent/internal/eventlog"
 	"github.com/worktrack/agent/internal/heartbeat"
+	"github.com/worktrack/agent/internal/lock"
 	"github.com/worktrack/agent/internal/sysinfo"
 )
 
@@ -143,6 +144,14 @@ func runRegister(mgr *config.Manager, cfg *config.Config, code string) {
 }
 
 func runLoops(cfg *config.Config) {
+	// Refuse to run if another agent is already alive in this session.
+	// The Run-key launch + a fallback detached process can otherwise
+	// overlap and cause duplicate heartbeats and console flashes.
+	if err := lock.AcquireSingleton("WorkTrackAgent"); err != nil {
+		log.Info().Err(err).Msg("agent already running, exiting")
+		return
+	}
+
 	dataDir, err := config.DataDir()
 	if err != nil {
 		fail("data dir: %v", err)

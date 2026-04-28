@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/worktrack/agent/internal/proc"
 )
 
 // Task names used in Windows Task Scheduler. We use a custom folder
@@ -69,7 +71,7 @@ func InstallWatchdogTask(spec WatchdogTaskSpec) error {
 // UninstallTask removes a scheduled task by name. Missing tasks are not
 // treated as errors so callers can run uninstall idempotently.
 func UninstallTask(name string) error {
-	cmd := exec.Command("schtasks.exe", "/Delete", "/TN", name, "/F")
+	cmd := proc.Command("schtasks.exe", "/Delete", "/TN", name, "/F")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		s := string(out)
@@ -83,7 +85,7 @@ func UninstallTask(name string) error {
 }
 
 func IsTaskInstalled(name string) (bool, error) {
-	cmd := exec.Command("schtasks.exe", "/Query", "/TN", name)
+	cmd := proc.Command("schtasks.exe", "/Query", "/TN", name)
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -95,7 +97,7 @@ func IsTaskInstalled(name string) (bool, error) {
 }
 
 func RunTask(name string) error {
-	cmd := exec.Command("schtasks.exe", "/Run", "/TN", name)
+	cmd := proc.Command("schtasks.exe", "/Run", "/TN", name)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("schtasks run %s: %w: %s", name, err, string(out))
 	}
@@ -113,7 +115,7 @@ func quoteTR(exePath, arguments string) string {
 }
 
 func runSchtasks(label string, args []string) error {
-	cmd := exec.Command("schtasks.exe", args...)
+	cmd := proc.Command("schtasks.exe", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("schtasks %s: %w: %s", label, err, strings.TrimSpace(string(out)))

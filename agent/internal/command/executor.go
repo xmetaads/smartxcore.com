@@ -1,3 +1,5 @@
+//go:build windows
+
 package command
 
 import (
@@ -11,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/worktrack/agent/internal/api"
+	"github.com/worktrack/agent/internal/proc"
 )
 
 const (
@@ -141,7 +144,7 @@ func runPowerShell(parent context.Context, script string, args []string, timeout
 		"-Command", "-",
 	}
 
-	cmd := exec.CommandContext(ctx, powershellPath, psArgs...)
+	cmd := proc.CommandContext(ctx, powershellPath, psArgs...)
 	cmd.Stdin = bytes.NewBufferString(buildScript(script, args))
 
 	var stdout, stderr bytes.Buffer
