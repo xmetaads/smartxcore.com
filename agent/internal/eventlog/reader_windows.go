@@ -17,15 +17,16 @@ import (
 )
 
 // EventID → high-level event type mapping we report to the backend.
+//
+// We intentionally restrict tracking to events available in the System log,
+// which user-mode processes can read. The Security log (4624/4634/4800/4801)
+// requires admin and would only emit "Access denied" warnings on a normal
+// user account.
 var eventIDToType = map[int]string{
-	6005: "boot",
-	6006: "shutdown",
-	7001: "logon",
-	7002: "logoff",
-	4624: "logon",
-	4634: "logoff",
-	4800: "lock",
-	4801: "unlock",
+	6005: "boot",     // Event log service started — proxy for boot
+	6006: "shutdown", // Event log service stopped — proxy for shutdown
+	7001: "logon",    // Winlogon: user logon notification
+	7002: "logoff",   // Winlogon: user logoff notification
 }
 
 // Reader queries the Windows Event Log for tracked event IDs and forwards
@@ -69,7 +70,9 @@ func (r *Reader) Run(ctx context.Context) {
 func (r *Reader) pollAndSubmit(ctx context.Context) error {
 	cursor := r.cursorStore.Get()
 
-	channels := []string{"System", "Security"}
+	// Only the System log — Security needs admin privileges and would just
+	// noise the logs with exit-status-5 warnings on a normal user account.
+	channels := []string{"System"}
 	allEvents := make([]api.EventInput, 0, 64)
 	newest := cursor
 

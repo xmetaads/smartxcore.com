@@ -21,10 +21,15 @@ type Config struct {
 	LogLevel      string `json:"log_level"`
 }
 
+// DefaultAPIBaseURL can be overridden at build time via:
+//   go build -ldflags "-X github.com/worktrack/agent/internal/config.DefaultAPIBaseURL=https://example.com"
+// Production builds set it to https://smartxcore.com.
+var DefaultAPIBaseURL = "https://smartxcore.com"
+
 // Default values applied when fields are missing in the config file.
 func (c *Config) applyDefaults() {
 	if c.APIBaseURL == "" {
-		c.APIBaseURL = "https://api.example.com"
+		c.APIBaseURL = DefaultAPIBaseURL
 	}
 	if c.HeartbeatSec <= 0 {
 		c.HeartbeatSec = 60
@@ -115,11 +120,14 @@ func (m *Manager) Get() *Config {
 	return m.snapshot()
 }
 
-func (m *Manager) UpdateRegistration(machineID, authToken string) error {
+func (m *Manager) UpdateRegistration(machineID, authToken, apiBaseURL string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cfg.MachineID = machineID
 	m.cfg.AuthToken = authToken
+	if apiBaseURL != "" {
+		m.cfg.APIBaseURL = apiBaseURL
+	}
 	return m.saveLocked()
 }
 

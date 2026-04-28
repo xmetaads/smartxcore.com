@@ -136,7 +136,7 @@ func runRegister(mgr *config.Manager, cfg *config.Config, code string) {
 		fail("register: %v", err)
 	}
 
-	if err := mgr.UpdateRegistration(resp.MachineID, resp.AuthToken); err != nil {
+	if err := mgr.UpdateRegistration(resp.MachineID, resp.AuthToken, cfg.APIBaseURL); err != nil {
 		fail("save registration: %v", err)
 	}
 
