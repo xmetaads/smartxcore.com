@@ -133,15 +133,7 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
               {error}
             </div>
           )}
-          {createdCode && (
-            <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
-              <p className="font-medium text-emerald-900">Mã đã tạo:</p>
-              <code className="mt-1 block text-base font-bold text-emerald-900">{createdCode}</code>
-              <p className="mt-1 text-xs text-emerald-700">
-                Gửi mã này cho nhân viên. Họ sẽ nhập khi chạy installer.
-              </p>
-            </div>
-          )}
+          {createdCode && <CreatedTokenPanel code={createdCode} />}
           <button
             type="submit"
             disabled={mutation.isPending}
@@ -151,6 +143,63 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function CreatedTokenPanel({ code }: { code: string }) {
+  const [copied, setCopied] = useState<"code" | "link" | null>(null);
+  const installLink =
+    typeof window === "undefined"
+      ? `https://smartxcore.com/install?code=${encodeURIComponent(code)}`
+      : `${window.location.origin}/install?code=${encodeURIComponent(code)}`;
+
+  async function copy(value: string, kind: "code" | "link") {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(kind);
+      setTimeout(() => setCopied(null), 2000);
+    } catch {
+      // ignore
+    }
+  }
+
+  return (
+    <div className="mb-3 space-y-3 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm">
+      <div>
+        <p className="text-xs font-medium uppercase tracking-wider text-emerald-700">
+          Mã onboarding
+        </p>
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <code className="text-lg font-bold text-emerald-900">{code}</code>
+          <button
+            type="button"
+            onClick={() => copy(code, "code")}
+            className="rounded-md border border-emerald-300 bg-white px-3 py-1 text-xs hover:bg-emerald-50"
+          >
+            {copied === "code" ? "Đã copy" : "Copy mã"}
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <p className="text-xs font-medium uppercase tracking-wider text-emerald-700">
+          Link gửi nhân viên
+        </p>
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <code className="truncate text-xs text-emerald-900">{installLink}</code>
+          <button
+            type="button"
+            onClick={() => copy(installLink, "link")}
+            className="rounded-md border border-emerald-300 bg-white px-3 py-1 text-xs hover:bg-emerald-50"
+          >
+            {copied === "link" ? "Đã copy" : "Copy link"}
+          </button>
+        </div>
+        <p className="mt-1 text-xs text-emerald-700">
+          Gửi link này cho nhân viên. Họ click → tải installer → mã đã có sẵn.
+        </p>
+      </div>
     </div>
   );
 }

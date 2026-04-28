@@ -19,7 +19,7 @@ export default function HomePage() {
             Đăng nhập quản trị
           </Link>
           <Link
-            href="/onboarding"
+            href="/install"
             className="block w-full rounded-md border border-slate-200 px-4 py-2.5 text-center text-sm font-medium text-slate-700 transition hover:bg-slate-50"
           >
             Cài đặt máy nhân viên
