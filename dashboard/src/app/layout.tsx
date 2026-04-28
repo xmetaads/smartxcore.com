@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
+
+import { AuthBootstrap } from "@/components/AuthBootstrap";
+import { QueryProvider } from "@/components/QueryProvider";
+
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "WorkTrack — Internal RMM",
+  title: "WorkTrack",
   description: "Internal endpoint monitoring and management",
   robots: { index: false, follow: false },
 };
@@ -14,7 +18,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="vi" suppressHydrationWarning>
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <QueryProvider>
+          <AuthBootstrap />
+          {children}
+        </QueryProvider>
+      </body>
     </html>
   );
 }
