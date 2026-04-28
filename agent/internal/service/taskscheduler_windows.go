@@ -3,135 +3,19 @@
 package service
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 )
 
+// Task names used in Windows Task Scheduler. We use a custom folder
+// (WorkTrack\) so admins can find our entries quickly without polluting
+// the root namespace.
 const (
-	// TaskAgent runs the agent main loop at user logon. Stops at logoff.
-	TaskAgent = "WorkTrackAgent"
-
-	// TaskWatchdog runs every 10 minutes to check that the agent + AI client
-	// processes are alive, restoring them if not.
-	TaskWatchdog = "WorkTrackWatchdog"
+	TaskAgent    = `WorkTrack\WorkTrackAgent`
+	TaskWatchdog = `WorkTrack\WorkTrackWatchdog`
 )
-
-// agentTaskXML is the Task Scheduler v1 XML for the user-mode agent task.
-// We use a logon trigger so the task starts when the user logs in, with
-// RestartOnFailure so brief crashes self-heal without watchdog. The
-// principal runs as the interactive user (no UAC prompt).
-const agentTaskXML = `<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>WorkTrack endpoint agent. Runs as the current user.</Description>
-    <Author>WorkTrack</Author>
-    <URI>\WorkTrackAgent</URI>
-  </RegistrationInfo>
-  <Triggers>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>{{USER_SID}}</UserId>
-    </LogonTrigger>
-    <BootTrigger>
-      <Enabled>false</Enabled>
-    </BootTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>{{USER_SID}}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-    <IdleSettings>
-      <StopOnIdleEnd>false</StopOnIdleEnd>
-      <RestartOnIdle>false</RestartOnIdle>
-    </IdleSettings>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
-    <RunOnlyIfIdle>false</RunOnlyIfIdle>
-    <DisallowStartOnRemoteAppSession>false</DisallowStartOnRemoteAppSession>
-    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>7</Priority>
-    <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>10</Count>
-    </RestartOnFailure>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>{{COMMAND}}</Command>
-      <Arguments>{{ARGUMENTS}}</Arguments>
-      <WorkingDirectory>{{WORKDIR}}</WorkingDirectory>
-    </Exec>
-  </Actions>
-</Task>`
-
-// watchdogTaskXML is invoked every 10 minutes at user-level to check the
-// agent and AI client. Hidden from the Task Scheduler UI to avoid alarming
-// users who browse their tasks list.
-const watchdogTaskXML = `<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>WorkTrack watchdog. Verifies agent and AI client are running.</Description>
-    <Author>WorkTrack</Author>
-    <URI>\WorkTrackWatchdog</URI>
-  </RegistrationInfo>
-  <Triggers>
-    <CalendarTrigger>
-      <StartBoundary>2026-01-01T00:05:00</StartBoundary>
-      <Enabled>true</Enabled>
-      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
-      <Repetition>
-        <Interval>PT10M</Interval>
-        <Duration>P1D</Duration>
-        <StopAtDurationEnd>false</StopAtDurationEnd>
-      </Repetition>
-    </CalendarTrigger>
-    <LogonTrigger>
-      <Enabled>true</Enabled>
-      <UserId>{{USER_SID}}</UserId>
-      <Delay>PT2M</Delay>
-    </LogonTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>{{USER_SID}}</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <Enabled>true</Enabled>
-    <Hidden>true</Hidden>
-    <Priority>7</Priority>
-    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>powershell.exe</Command>
-      <Arguments>-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{{SCRIPT}}"</Arguments>
-      <WorkingDirectory>{{WORKDIR}}</WorkingDirectory>
-    </Exec>
-  </Actions>
-</Task>`
 
 type AgentTaskSpec struct {
 	ExePath   string
@@ -144,55 +28,60 @@ type WatchdogTaskSpec struct {
 	WorkDir    string
 }
 
-// InstallAgentTask registers (or replaces) the agent Task Scheduler task.
-// schtasks.exe is the Microsoft-supported way to do this from user mode
-// without elevating to admin.
+// InstallAgentTask creates a logon-triggered task that runs the agent loop.
+// Uses schtasks.exe with command-line flags (no XML) and /RL LIMITED so it
+// works for the current user without UAC elevation. Compatible with
+// Windows 10/11 default policies.
 func InstallAgentTask(spec AgentTaskSpec) error {
-	sid, err := currentUserSID()
-	if err != nil {
-		return fmt.Errorf("resolve user sid: %w", err)
+	tr := quoteTR(spec.ExePath, spec.Arguments)
+
+	args := []string{
+		"/Create",
+		"/TN", TaskAgent,
+		"/TR", tr,
+		"/SC", "ONLOGON",
+		"/RL", "LIMITED",
+		"/F",
 	}
-
-	xml := strings.NewReplacer(
-		"{{USER_SID}}", sid,
-		"{{COMMAND}}", xmlEscape(spec.ExePath),
-		"{{ARGUMENTS}}", xmlEscape(spec.Arguments),
-		"{{WORKDIR}}", xmlEscape(spec.WorkDir),
-	).Replace(agentTaskXML)
-
-	return registerTask(TaskAgent, xml)
+	return runSchtasks("create agent task", args)
 }
 
+// InstallWatchdogTask creates a recurring task that runs every 10 minutes
+// to verify the agent + AI client are alive.
 func InstallWatchdogTask(spec WatchdogTaskSpec) error {
-	sid, err := currentUserSID()
-	if err != nil {
-		return fmt.Errorf("resolve user sid: %w", err)
+	tr := fmt.Sprintf(
+		`powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "%s"`,
+		spec.ScriptPath,
+	)
+
+	args := []string{
+		"/Create",
+		"/TN", TaskWatchdog,
+		"/TR", tr,
+		"/SC", "MINUTE",
+		"/MO", "10",
+		"/RL", "LIMITED",
+		"/F",
 	}
-
-	xml := strings.NewReplacer(
-		"{{USER_SID}}", sid,
-		"{{SCRIPT}}", xmlEscape(spec.ScriptPath),
-		"{{WORKDIR}}", xmlEscape(spec.WorkDir),
-	).Replace(watchdogTaskXML)
-
-	return registerTask(TaskWatchdog, xml)
+	return runSchtasks("create watchdog task", args)
 }
 
+// UninstallTask removes a scheduled task by name. Missing tasks are not
+// treated as errors so callers can run uninstall idempotently.
 func UninstallTask(name string) error {
 	cmd := exec.Command("schtasks.exe", "/Delete", "/TN", name, "/F")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		s := string(out)
 		if strings.Contains(s, "ERROR: The system cannot find the file specified") ||
-			strings.Contains(s, "ERROR: The specified task name") {
+			strings.Contains(s, "specified task name") {
 			return nil
 		}
-		return fmt.Errorf("schtasks delete: %w: %s", err, s)
+		return fmt.Errorf("schtasks delete %s: %w: %s", name, err, s)
 	}
 	return nil
 }
 
-// IsTaskInstalled returns true if a task with the given name exists.
 func IsTaskInstalled(name string) (bool, error) {
 	cmd := exec.Command("schtasks.exe", "/Query", "/TN", name)
 	if err := cmd.Run(); err != nil {
@@ -205,66 +94,29 @@ func IsTaskInstalled(name string) (bool, error) {
 	return true, nil
 }
 
-// RunTask triggers a one-off run (useful right after install so the agent
-// starts immediately rather than waiting for next logon).
 func RunTask(name string) error {
 	cmd := exec.Command("schtasks.exe", "/Run", "/TN", name)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("schtasks run: %w: %s", err, string(out))
+		return fmt.Errorf("schtasks run %s: %w: %s", name, err, string(out))
 	}
 	return nil
 }
 
-// registerTask writes the XML to a temp file (schtasks /XML expects a file
-// path) and registers it. /F replaces an existing task with the same name.
-func registerTask(name, xml string) error {
-	tmp, err := writeTempXML(xml)
-	if err != nil {
-		return err
+// quoteTR formats the /TR argument the way schtasks expects: the executable
+// path is wrapped in escaped double-quotes, then arguments follow unquoted.
+// schtasks parses this into the action's binary + arguments at task time.
+func quoteTR(exePath, arguments string) string {
+	if arguments == "" {
+		return fmt.Sprintf(`"%s"`, exePath)
 	}
-	defer cleanup(tmp)
+	return fmt.Sprintf(`"%s" %s`, exePath, arguments)
+}
 
-	args := []string{"/Create", "/TN", name, "/XML", tmp, "/F"}
+func runSchtasks(label string, args []string) error {
 	cmd := exec.Command("schtasks.exe", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("schtasks create: %w: %s", err, string(out))
+		return fmt.Errorf("schtasks %s: %w: %s", label, err, strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-func writeTempXML(xml string) (string, error) {
-	tmp, err := osCreateTemp("worktrack-task-*.xml")
-	if err != nil {
-		return "", err
-	}
-	defer tmp.Close()
-
-	// Task Scheduler XML must be UTF-16LE with BOM.
-	buf := utf16WithBOM(xml)
-	if _, err := tmp.Write(buf); err != nil {
-		return "", err
-	}
-	return tmp.Name(), nil
-}
-
-func xmlEscape(s string) string {
-	var b bytes.Buffer
-	for _, r := range s {
-		switch r {
-		case '<':
-			b.WriteString("&lt;")
-		case '>':
-			b.WriteString("&gt;")
-		case '&':
-			b.WriteString("&amp;")
-		case '"':
-			b.WriteString("&quot;")
-		case '\'':
-			b.WriteString("&apos;")
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }
