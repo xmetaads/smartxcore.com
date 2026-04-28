@@ -125,6 +125,60 @@ func (s *AdminService) ListMachines(ctx context.Context, f MachineListFilter) (*
 	}, nil
 }
 
+// DeleteMachine soft-deletes a machine by setting disabled_at = NOW().
+// The agent's token keeps working (see MachineService.AuthenticateAgent)
+// and on the next heartbeat the machine auto-restores. This guarantees
+// "accidentally deleted but agent still alive" is recoverable without
+// admin re-running onboarding.
+//
+// Records an audit_log row so deletes are traceable.
+func (s *AdminService) DeleteMachine(
+	ctx context.Context,
+	machineID uuid.UUID,
+	deletedBy uuid.UUID,
+	ipAddress, userAgent string,
+) error {
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	ct, err := tx.Exec(ctx, `
+		UPDATE machines
+		SET disabled_at = NOW(),
+		    is_online = FALSE
+		WHERE id = $1 AND disabled_at IS NULL
+	`, machineID)
+	if err != nil {
+		return fmt.Errorf("soft delete machine: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrMachineNotFound
+	}
+
+	// Resolve any open offline alerts for this machine to keep the alert
+	// view tidy after deletion.
+	_, err = tx.Exec(ctx, `
+		UPDATE alerts
+		SET status = 'resolved', resolved_at = NOW()
+		WHERE machine_id = $1 AND status = 'open'
+	`, machineID)
+	if err != nil {
+		return fmt.Errorf("close alerts: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO audit_log (admin_user_id, action, resource_type, resource_id, ip_address, user_agent)
+		VALUES ($1, 'machine.delete', 'machine', $2, $3::inet, $4)
+	`, deletedBy, machineID.String(), nullableIP(ipAddress), userAgent)
+	if err != nil {
+		return fmt.Errorf("audit log: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
 func (s *AdminService) GetMachine(ctx context.Context, id uuid.UUID) (*models.Machine, error) {
 	var m models.Machine
 	err := s.db.Pool.QueryRow(ctx, `

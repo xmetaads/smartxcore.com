@@ -75,6 +75,32 @@ func (h *AdminHandler) GetMachine(c *fiber.Ctx) error {
 	return c.JSON(m)
 }
 
+// DeleteMachine soft-deletes a machine. The agent on that machine keeps
+// its auth token valid: if the agent heartbeats again the row is
+// auto-restored (disabled_at cleared). This is what makes "I deleted by
+// accident" recoverable for both online and offline machines.
+func (h *AdminHandler) DeleteMachine(c *fiber.Ctx) error {
+	user, ok := h.currentUser(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "no user"})
+	}
+
+	id, err := uuid.Parse(c.Params("id"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid id"})
+	}
+
+	err = h.admin.DeleteMachine(c.Context(), id, user.UserID, c.IP(), c.Get("User-Agent"))
+	if err != nil {
+		if errors.Is(err, services.ErrMachineNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "not found"})
+		}
+		log.Error().Err(err).Msg("delete machine failed")
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "delete failed"})
+	}
+	return c.JSON(fiber.Map{"deleted": true})
+}
+
 // === Onboarding tokens ===
 
 type createOnboardingTokenRequest struct {

@@ -42,6 +42,12 @@ export function listMachines(filter: MachineFilter = {}) {
   return apiClient.get<MachineList>(`/api/v1/admin/machines${qs ? `?${qs}` : ""}`);
 }
 
+// Soft-deletes a machine. The agent's token stays valid; if the agent
+// heartbeats again the machine auto-restores into the list.
+export function deleteMachine(id: string) {
+  return apiClient.delete<{ deleted: boolean }>(`/api/v1/admin/machines/${id}`);
+}
+
 // === Onboarding tokens ===
 
 export type OnboardingToken = {

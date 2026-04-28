@@ -130,6 +130,10 @@ func (s *MachineService) RegisterMachine(
 
 // AuthenticateAgent validates an auth token and returns the machine ID.
 // This is called on every agent request (heartbeat, events, command poll).
+//
+// Soft-deleted (disabled_at IS NOT NULL) machines still authenticate so
+// that an accidentally-deleted machine can auto-restore on next heartbeat
+// — see RecordHeartbeat which clears disabled_at on success.
 func (s *MachineService) AuthenticateAgent(ctx context.Context, authToken string) (uuid.UUID, error) {
 	if len(authToken) < 16 {
 		return uuid.Nil, ErrInvalidAuthToken
@@ -137,8 +141,7 @@ func (s *MachineService) AuthenticateAgent(ctx context.Context, authToken string
 
 	var machineID uuid.UUID
 	err := s.db.Pool.QueryRow(ctx, `
-		SELECT id FROM machines
-		WHERE auth_token = $1 AND disabled_at IS NULL
+		SELECT id FROM machines WHERE auth_token = $1
 	`, authToken).Scan(&machineID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, ErrInvalidAuthToken
@@ -167,7 +170,8 @@ func (s *MachineService) RecordHeartbeat(
 		SET last_seen_at = NOW(),
 		    is_online = TRUE,
 		    agent_version = $1,
-		    public_ip = $2::inet
+		    public_ip = $2::inet,
+		    disabled_at = NULL
 		WHERE id = $3
 	`, req.AgentVersion, nullableIP(publicIP), machineID)
 	if err != nil {

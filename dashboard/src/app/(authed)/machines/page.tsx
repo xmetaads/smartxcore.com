@@ -1,19 +1,36 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { listMachines } from "@/lib/queries";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { APIError } from "@/lib/api-client";
+import { deleteMachine, listMachines, type MachineSummary } from "@/lib/queries";
 
 export default function MachinesPage() {
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [onlineOnly, setOnlineOnly] = useState(false);
   const [page, setPage] = useState(1);
+  const [pendingDelete, setPendingDelete] = useState<MachineSummary | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["machines", { search, onlineOnly, page }],
     queryFn: () => listMachines({ search, online: onlineOnly, page, pageSize: 50 }),
     refetchInterval: 30_000,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteMachine(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["machines"] });
+      setPendingDelete(null);
+      setDeleteError(null);
+    },
+    onError: (err) => {
+      setDeleteError(err instanceof APIError ? err.message : "Xóa thất bại");
+    },
   });
 
   return (
@@ -76,6 +93,7 @@ export default function MachinesPage() {
                 <th className="px-4 py-3 font-medium">OS</th>
                 <th className="px-4 py-3 font-medium">Last seen</th>
                 <th className="px-4 py-3 font-medium">Agent</th>
+                <th className="px-4 py-3 font-medium"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -107,6 +125,18 @@ export default function MachinesPage() {
                     {m.last_seen_at ? new Date(m.last_seen_at).toLocaleString("vi-VN") : "—"}
                   </td>
                   <td className="px-4 py-3 font-mono text-xs">{m.agent_version ?? "—"}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingDelete(m);
+                        setDeleteError(null);
+                      }}
+                      className="rounded-md border border-slate-200 px-3 py-1 text-xs text-slate-600 hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+                    >
+                      Xóa
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -139,6 +169,39 @@ export default function MachinesPage() {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        tone="danger"
+        title="Xóa máy khỏi danh sách?"
+        description={
+          <div className="space-y-2">
+            <p>
+              Máy <strong>{pendingDelete?.employee_name}</strong> ({pendingDelete?.hostname ?? "—"})
+              sẽ bị ẩn khỏi danh sách.
+            </p>
+            <p className="text-xs text-slate-500">
+              Đây là <strong>soft delete</strong>: agent vẫn giữ token. Nếu xóa nhầm, máy sẽ tự
+              động xuất hiện lại khi nhân viên online (heartbeat tiếp theo).
+            </p>
+            {deleteError && (
+              <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {deleteError}
+              </p>
+            )}
+          </div>
+        }
+        confirmLabel="Xóa"
+        cancelLabel="Hủy"
+        isPending={deleteMutation.isPending}
+        onCancel={() => {
+          setPendingDelete(null);
+          setDeleteError(null);
+        }}
+        onConfirm={() => {
+          if (pendingDelete) deleteMutation.mutate(pendingDelete.id);
+        }}
+      />
     </div>
   );
 }

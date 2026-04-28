@@ -195,6 +195,7 @@ func buildApp(d appDeps) *fiber.App {
 
 	admin.Get("/machines", adminH.ListMachines)
 	admin.Get("/machines/:id", adminH.GetMachine)
+	admin.Delete("/machines/:id", middleware.RequireRole("admin"), adminH.DeleteMachine)
 
 	admin.Get("/onboarding-tokens", adminH.ListOnboardingTokens)
 	admin.Post("/onboarding-tokens", middleware.RequireRole("admin"), adminH.CreateOnboardingToken)
