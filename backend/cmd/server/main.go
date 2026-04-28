@@ -17,6 +17,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 	"github.com/rs/zerolog/log"
 
+	"github.com/worktrack/backend/internal/auth"
 	"github.com/worktrack/backend/internal/config"
 	"github.com/worktrack/backend/internal/database"
 	"github.com/worktrack/backend/internal/email"
@@ -49,15 +50,30 @@ func main() {
 
 	machineSvc := services.NewMachineService(db, cfg.Agent.TokenLength)
 	commandSvc := services.NewCommandService(db)
+	adminSvc := services.NewAdminService(db)
+
+	jwtIssuer := auth.NewJWTIssuer(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL)
+	authSvc := services.NewAuthService(db, jwtIssuer, cfg.Auth.RefreshTokenTTL)
 
 	mailer := buildMailer(cfg.Email)
 	notificationSvc := services.NewNotificationService(mailer, cfg.Email.AlertEmail, cfg.Email.DashboardURL)
 	notificationSvc.Start(rootCtx)
 	defer notificationSvc.Stop()
 
-	app := buildApp(cfg, db, machineSvc, commandSvc, notificationSvc)
+	deps := appDeps{
+		cfg:             cfg,
+		db:              db,
+		machineSvc:      machineSvc,
+		commandSvc:      commandSvc,
+		adminSvc:        adminSvc,
+		authSvc:         authSvc,
+		notificationSvc: notificationSvc,
+		jwtIssuer:       jwtIssuer,
+	}
+	app := buildApp(deps)
 
 	go runTimeoutWorker(rootCtx, commandSvc)
+	go runSessionCleanupWorker(rootCtx, authSvc)
 
 	go func() {
 		addr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -93,13 +109,18 @@ func buildMailer(cfg config.EmailConfig) email.Mailer {
 	return email.NewSMTPMailer(cfg.Host, port, cfg.Username, cfg.Password, cfg.From)
 }
 
-func buildApp(
-	cfg *config.Config,
-	db *database.DB,
-	machineSvc *services.MachineService,
-	commandSvc *services.CommandService,
-	notificationSvc *services.NotificationService,
-) *fiber.App {
+type appDeps struct {
+	cfg             *config.Config
+	db              *database.DB
+	machineSvc      *services.MachineService
+	commandSvc      *services.CommandService
+	adminSvc        *services.AdminService
+	authSvc         *services.AuthService
+	notificationSvc *services.NotificationService
+	jwtIssuer       *auth.JWTIssuer
+}
+
+func buildApp(d appDeps) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:               "WorkTrack",
 		ServerHeader:          "WorkTrack",
@@ -114,13 +135,13 @@ func buildApp(
 	app.Use(recover.New())
 	app.Use(requestid.New())
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     joinOrigins(cfg.CORS.AllowedOrigins),
+		AllowOrigins:     joinOrigins(d.cfg.CORS.AllowedOrigins),
 		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 		AllowHeaders:     "Authorization,Content-Type,X-Agent-Token,X-Request-ID",
 		AllowCredentials: true,
 	}))
 
-	health := handlers.NewHealthHandler(db, Version)
+	health := handlers.NewHealthHandler(d.db, Version)
 	app.Get("/healthz", health.Live)
 	app.Get("/readyz", health.Ready)
 
@@ -128,18 +149,16 @@ func buildApp(
 
 	// === Agent endpoints ===
 	agent := v1.Group("/agent")
-	agentH := handlers.NewAgentHandler(machineSvc, commandSvc, notificationSvc)
+	agentH := handlers.NewAgentHandler(d.machineSvc, d.commandSvc, d.notificationSvc)
 
-	// /register is public (uses one-time onboarding code instead of agent token)
 	agent.Post("/register", limiter.New(limiter.Config{
 		Max:        10,
 		Expiration: time.Minute,
 	}), agentH.Register)
 
-	// All other agent endpoints require X-Agent-Token
-	authed := agent.Group("", middleware.AgentAuth(machineSvc))
+	authed := agent.Group("", middleware.AgentAuth(d.machineSvc))
 	authed.Use(limiter.New(limiter.Config{
-		Max:        cfg.Limits.AgentPerMinute,
+		Max:        d.cfg.Limits.AgentPerMinute,
 		Expiration: time.Minute,
 	}))
 	authed.Post("/heartbeat", agentH.Heartbeat)
@@ -147,8 +166,31 @@ func buildApp(
 	authed.Get("/commands", agentH.PollCommands)
 	authed.Post("/commands/:id/result", agentH.SubmitResult)
 
-	// === Admin endpoints will be wired in next iteration ===
-	// v1.Group("/admin", middleware.AdminAuth(...))
+	// === Auth endpoints (public for login, cookie-protected for refresh) ===
+	authH := handlers.NewAuthHandler(d.authSvc, d.cfg.Server.Environment == "production")
+	authGroup := v1.Group("/auth", limiter.New(limiter.Config{
+		Max:        20,
+		Expiration: time.Minute,
+	}))
+	authGroup.Post("/login", authH.Login)
+	authGroup.Post("/refresh", authH.Refresh)
+	authGroup.Post("/logout", authH.Logout)
+
+	// === Admin endpoints (require JWT) ===
+	adminH := handlers.NewAdminHandler(d.adminSvc, d.commandSvc)
+	admin := v1.Group("/admin", middleware.AdminAuth(d.jwtIssuer), limiter.New(limiter.Config{
+		Max:        d.cfg.Limits.AdminPerMinute,
+		Expiration: time.Minute,
+	}))
+
+	admin.Get("/machines", adminH.ListMachines)
+	admin.Get("/machines/:id", adminH.GetMachine)
+
+	admin.Get("/onboarding-tokens", adminH.ListOnboardingTokens)
+	admin.Post("/onboarding-tokens", middleware.RequireRole("admin"), adminH.CreateOnboardingToken)
+
+	admin.Post("/commands", middleware.RequireRole("admin"), adminH.CreateCommand)
+	admin.Get("/commands/:id", adminH.GetCommand)
 
 	return app
 }
@@ -199,6 +241,28 @@ func runTimeoutWorker(ctx context.Context, svc *services.CommandService) {
 			}
 			if n > 0 {
 				log.Info().Int64("count", n).Msg("commands marked timeout")
+			}
+		}
+	}
+}
+
+// runSessionCleanupWorker prunes expired and revoked admin sessions hourly.
+func runSessionCleanupWorker(ctx context.Context, svc *services.AuthService) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := svc.CleanupExpiredSessions(ctx)
+			if err != nil {
+				log.Warn().Err(err).Msg("session cleanup failed")
+				continue
+			}
+			if n > 0 {
+				log.Info().Int64("count", n).Msg("expired sessions removed")
 			}
 		}
 	}
