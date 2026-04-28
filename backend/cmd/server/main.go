@@ -60,6 +60,8 @@ func main() {
 	notificationSvc.Start(rootCtx)
 	defer notificationSvc.Stop()
 
+	alertSvc := services.NewAlertService(db, notificationSvc)
+
 	deps := appDeps{
 		cfg:             cfg,
 		db:              db,
@@ -74,6 +76,8 @@ func main() {
 
 	go runTimeoutWorker(rootCtx, commandSvc)
 	go runSessionCleanupWorker(rootCtx, authSvc)
+	go runAlertWorker(rootCtx, alertSvc)
+	go runOnlineSyncWorker(rootCtx, alertSvc)
 
 	go func() {
 		addr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -263,6 +267,58 @@ func runSessionCleanupWorker(ctx context.Context, svc *services.AuthService) {
 			}
 			if n > 0 {
 				log.Info().Int64("count", n).Msg("expired sessions removed")
+			}
+		}
+	}
+}
+
+// runAlertWorker scans for offline machines every 30 minutes and resolves
+// alerts whose machines came back online. New alerts trigger SES emails.
+func runAlertWorker(ctx context.Context, svc *services.AlertService) {
+	const offlineThresholdHours = 24
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+
+	runOnce := func() {
+		opened, err := svc.ScanOfflineMachines(ctx, offlineThresholdHours)
+		if err != nil {
+			log.Warn().Err(err).Msg("scan offline machines failed")
+		} else if opened > 0 {
+			log.Info().Int("count", opened).Msg("offline alerts opened")
+		}
+		resolved, err := svc.MarkOnlineMachinesResolved(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("resolve offline alerts failed")
+		} else if resolved > 0 {
+			log.Info().Int64("count", resolved).Msg("offline alerts resolved")
+		}
+	}
+	runOnce()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runOnce()
+		}
+	}
+}
+
+// runOnlineSyncWorker keeps machines.is_online accurate based on heartbeat
+// freshness. Runs every minute so the dashboard reflects reality even when
+// agents stop heartbeating without sending an explicit shutdown event.
+func runOnlineSyncWorker(ctx context.Context, svc *services.AlertService) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := svc.SyncOnlineFlag(ctx); err != nil {
+				log.Warn().Err(err).Msg("sync online flag failed")
 			}
 		}
 	}
