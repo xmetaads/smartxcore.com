@@ -72,6 +72,17 @@ If Err.Number = 0 Then
 End If
 `
 
+// showEmailDialog asks the employee for their work email. Used in the
+// bulk-enroll path where the deployment token comes from the server and
+// the only thing the employee provides is their identity.
+func showEmailDialog(apiBase string) (string, error) {
+	prompt := fmt.Sprintf(
+		"Nhập email công ty của bạn để cài đặt WorkTrack agent.\r\nServer: %s",
+		apiBase,
+	)
+	return promptViaWScript(prompt, "WorkTrack — Cài đặt agent")
+}
+
 // showInstallDialog displays a native InputBox via wscript.exe and
 // returns the value the user typed. Empty string means the user cancelled
 // (closed the dialog or pressed Cancel).
@@ -83,6 +94,18 @@ End If
 //     hosts.
 //   - wscript needs no HideWindow at all — it simply shows the InputBox.
 func showInstallDialog(apiBase string) (string, error) {
+	prompt := fmt.Sprintf(
+		"Nhập mã onboarding (ví dụ: WT-A3F7-K9B2-X4M1)\r\nServer: %s",
+		apiBase,
+	)
+	return promptViaWScript(prompt, "WorkTrack — Cài đặt agent")
+}
+
+// promptViaWScript renders a single-line input dialog via wscript.exe.
+// Plain exec.Command — NEVER set HideWindow on wscript: Windows uses the
+// parent's nShowWindow to seed child show-state for GUI apps, so hiding
+// wscript would also hide the InputBox.
+func promptViaWScript(prompt, title string) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "wt-installer-*")
 	if err != nil {
 		return "", fmt.Errorf("tmp dir: %w", err)
@@ -96,15 +119,6 @@ func showInstallDialog(apiBase string) (string, error) {
 		return "", fmt.Errorf("write vbs: %w", err)
 	}
 
-	prompt := fmt.Sprintf(
-		"Nhập mã onboarding (ví dụ: WT-A3F7-K9B2-X4M1)\r\nServer: %s",
-		apiBase,
-	)
-	title := "WorkTrack — Cài đặt agent"
-
-	// Plain exec.Command — DO NOT use the HideWindow-flagged wrapper here.
-	// Hiding wscript suppresses the InputBox dialog because Windows uses
-	// the parent's nShowWindow to seed child show-state for GUI apps.
 	cmd := exec.Command("wscript.exe", "//Nologo", vbsPath, prompt, title, resultPath)
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("wscript: %w", err)

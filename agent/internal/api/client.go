@@ -119,6 +119,28 @@ type RegisterResponse struct {
 	AuthToken string `json:"auth_token"`
 }
 
+// EnrollRequest is the bulk-enrollment payload — same shape as
+// RegisterRequest but with a shared deployment_code instead of a one-time
+// onboarding_code, plus the email the employee identifies themselves by.
+type EnrollRequest struct {
+	DeploymentCode string       `json:"deployment_code"`
+	EmployeeEmail  string       `json:"employee_email"`
+	EmployeeName   string       `json:"employee_name,omitempty"`
+	WindowsUser    string       `json:"windows_user,omitempty"`
+	Info           RegisterInfo `json:"info"`
+}
+
+type EnrollResponse struct {
+	MachineID string `json:"machine_id"`
+	AuthToken string `json:"auth_token"`
+}
+
+type InstallConfigResponse struct {
+	DeploymentCode string `json:"deployment_code,omitempty"`
+	Available      bool   `json:"available"`
+	Reason         string `json:"reason,omitempty"`
+}
+
 type HeartbeatRequest struct {
 	AgentVersion string `json:"agent_version"`
 	CPUPercent   *int16 `json:"cpu_percent,omitempty"`
@@ -169,6 +191,27 @@ type CommandResultRequest struct {
 func (c *Client) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {
 	var resp RegisterResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agent/register", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// Enroll performs a bulk-enrollment using a shared deployment token.
+// Returns a fresh auth token unique to this machine.
+func (c *Client) Enroll(ctx context.Context, req EnrollRequest) (*EnrollResponse, error) {
+	var resp EnrollResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agent/enroll", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// InstallConfig fetches the public install configuration (active
+// deployment code, if any). Used by the installer at startup so it can
+// run "no-args" and still know which token to enroll with.
+func (c *Client) InstallConfig(ctx context.Context) (*InstallConfigResponse, error) {
+	var resp InstallConfigResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/install/config", nil, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

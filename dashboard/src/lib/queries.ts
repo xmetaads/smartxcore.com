@@ -77,6 +77,48 @@ export function createOnboardingToken(input: {
   return apiClient.post<OnboardingToken>("/api/v1/admin/onboarding-tokens", input);
 }
 
+// === Deployment tokens (bulk enrollment) ===
+
+export type DeploymentToken = {
+  id: string;
+  code: string;
+  name: string;
+  description?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+  revoked_at?: string | null;
+  max_uses?: number | null;
+  current_uses: number;
+  is_active: boolean;
+  allowed_email_domains?: string[] | null;
+};
+
+export function listDeploymentTokens(includeRevoked = false) {
+  const qs = includeRevoked ? "?include_revoked=true" : "";
+  return apiClient.get<{ items: DeploymentToken[] }>(`/api/v1/admin/deployment-tokens${qs}`);
+}
+
+export function createDeploymentToken(input: {
+  name: string;
+  description?: string;
+  ttl_days: number;
+  max_uses?: number;
+  allowed_email_domains?: string[];
+  set_active: boolean;
+}) {
+  return apiClient.post<DeploymentToken>("/api/v1/admin/deployment-tokens", input);
+}
+
+export function revokeDeploymentToken(id: string) {
+  return apiClient.post<{ revoked: boolean }>(`/api/v1/admin/deployment-tokens/${id}/revoke`);
+}
+
+export function activateDeploymentToken(id: string) {
+  return apiClient.post<{ activated: boolean }>(`/api/v1/admin/deployment-tokens/${id}/activate`);
+}
+
 // === Commands ===
 
 export type CommandStatus =

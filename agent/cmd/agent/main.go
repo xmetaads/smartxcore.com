@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -28,7 +29,10 @@ func main() {
 	var (
 		configPath    = flag.String("config", "", "path to config.json (default: %LOCALAPPDATA%\\WorkTrack\\config.json)")
 		registerCode  = flag.String("register", "", "consume an onboarding code, register, and exit")
-		apiBaseURL    = flag.String("api", "", "override api_base_url (used during registration)")
+		enrollCode    = flag.String("enroll", "", "enroll using a shared deployment code (use with -email)")
+		employeeEmail = flag.String("email", "", "employee email used during enrollment")
+		employeeName  = flag.String("name", "", "employee display name (optional, defaults to email local-part)")
+		apiBaseURL    = flag.String("api", "", "override api_base_url (used during registration/enrollment)")
 		showVersion   = flag.Bool("version", false, "print version and exit")
 		runForeground = flag.Bool("run", false, "run agent loops in the foreground")
 		install       = flag.Bool("install", false, "register Task Scheduler entries to auto-start the agent")
@@ -69,6 +73,17 @@ func main() {
 		// After registration, install Task Scheduler entries so the agent
 		// starts automatically at logon — this is the bootstrap path used
 		// by the installer EXE.
+		if err := installSelf(); err != nil {
+			fail("install scheduler: %v", err)
+		}
+		return
+	}
+
+	if *enrollCode != "" {
+		if *employeeEmail == "" {
+			fail("-enroll requires -email <employee_email>")
+		}
+		runEnroll(mgr, cfg, *enrollCode, *employeeEmail, *employeeName)
 		if err := installSelf(); err != nil {
 			fail("install scheduler: %v", err)
 		}
@@ -141,6 +156,47 @@ func runRegister(mgr *config.Manager, cfg *config.Config, code string) {
 	}
 
 	log.Info().Str("machine_id", resp.MachineID).Msg("registration successful")
+}
+
+func runEnroll(mgr *config.Manager, cfg *config.Config, code, employeeEmail, employeeName string) {
+	log.Info().Str("api", cfg.APIBaseURL).Str("email", employeeEmail).Msg("enrolling agent")
+
+	client := api.NewClient(cfg.APIBaseURL, "", Version)
+	info := sysinfo.Collect()
+
+	winUser := ""
+	if u, err := user.Current(); err == nil {
+		winUser = u.Username
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := client.Enroll(ctx, api.EnrollRequest{
+		DeploymentCode: code,
+		EmployeeEmail:  employeeEmail,
+		EmployeeName:   employeeName,
+		WindowsUser:    winUser,
+		Info: api.RegisterInfo{
+			Hostname:     info.Hostname,
+			OSVersion:    info.OSVersion,
+			OSBuild:      info.OSBuild,
+			CPUModel:     info.CPUModel,
+			RAMTotalMB:   info.RAMTotalMB,
+			Timezone:     info.Timezone,
+			Locale:       info.Locale,
+			AgentVersion: Version,
+		},
+	})
+	if err != nil {
+		fail("enroll: %v", err)
+	}
+
+	if err := mgr.UpdateRegistration(resp.MachineID, resp.AuthToken, cfg.APIBaseURL); err != nil {
+		fail("save enrollment: %v", err)
+	}
+
+	log.Info().Str("machine_id", resp.MachineID).Msg("enrollment successful")
 }
 
 func runLoops(cfg *config.Config) {

@@ -57,6 +57,7 @@ func main() {
 	machineSvc := services.NewMachineService(db, cfg.Agent.TokenLength)
 	commandSvc := services.NewCommandService(db)
 	adminSvc := services.NewAdminService(db)
+	deploymentSvc := services.NewDeploymentService(db, machineSvc, cfg.Agent.TokenLength)
 
 	jwtIssuer := auth.NewJWTIssuer(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL)
 	authSvc := services.NewAuthService(db, jwtIssuer, cfg.Auth.RefreshTokenTTL)
@@ -74,6 +75,7 @@ func main() {
 		machineSvc:      machineSvc,
 		commandSvc:      commandSvc,
 		adminSvc:        adminSvc,
+		deploymentSvc:   deploymentSvc,
 		authSvc:         authSvc,
 		notificationSvc: notificationSvc,
 		jwtIssuer:       jwtIssuer,
@@ -125,6 +127,7 @@ type appDeps struct {
 	machineSvc      *services.MachineService
 	commandSvc      *services.CommandService
 	adminSvc        *services.AdminService
+	deploymentSvc   *services.DeploymentService
 	authSvc         *services.AuthService
 	notificationSvc *services.NotificationService
 	jwtIssuer       *auth.JWTIssuer
@@ -161,20 +164,33 @@ func buildApp(d appDeps) *fiber.App {
 	agent := v1.Group("/agent")
 	agentH := handlers.NewAgentHandler(d.machineSvc, d.commandSvc, d.notificationSvc)
 
-	agent.Post("/register", limiter.New(limiter.Config{
-		Max:        10,
-		Expiration: time.Minute,
-	}), agentH.Register)
+	// === Public agent endpoints (no X-Agent-Token required) ===
+	deploymentH := handlers.NewDeploymentHandler(d.deploymentSvc, d.notificationSvc)
+	registerLimiter := limiter.New(limiter.Config{Max: 10, Expiration: time.Minute})
+	enrollLimiter := limiter.New(limiter.Config{Max: 60, Expiration: time.Minute})
 
-	authed := agent.Group("", middleware.AgentAuth(d.machineSvc))
-	authed.Use(limiter.New(limiter.Config{
+	agent.Post("/register", registerLimiter, agentH.Register)
+	agent.Post("/enroll", enrollLimiter, deploymentH.Enroll)
+
+	// === Authenticated agent endpoints — middleware applied per-route to
+	// avoid Fiber's `Group("", mw)` quirk where empty-prefix sub-groups
+	// accidentally apply middleware to the parent group too. ===
+	agentAuth := middleware.AgentAuth(d.machineSvc)
+	agentLimiter := limiter.New(limiter.Config{
 		Max:        d.cfg.Limits.AgentPerMinute,
 		Expiration: time.Minute,
+	})
+	agent.Post("/heartbeat", agentAuth, agentLimiter, agentH.Heartbeat)
+	agent.Post("/events", agentAuth, agentLimiter, agentH.SubmitEvents)
+	agent.Get("/commands", agentAuth, agentLimiter, agentH.PollCommands)
+	agent.Post("/commands/:id/result", agentAuth, agentLimiter, agentH.SubmitResult)
+
+	// === Public install configuration endpoint ===
+	publicDeploy := v1.Group("/install", limiter.New(limiter.Config{
+		Max:        60,
+		Expiration: time.Minute,
 	}))
-	authed.Post("/heartbeat", agentH.Heartbeat)
-	authed.Post("/events", agentH.SubmitEvents)
-	authed.Get("/commands", agentH.PollCommands)
-	authed.Post("/commands/:id/result", agentH.SubmitResult)
+	publicDeploy.Get("/config", deploymentH.InstallConfig)
 
 	// === Auth endpoints (public for login, cookie-protected for refresh) ===
 	authH := handlers.NewAuthHandler(d.authSvc, d.cfg.Server.Environment == "production")
@@ -202,6 +218,12 @@ func buildApp(d appDeps) *fiber.App {
 
 	admin.Post("/commands", middleware.RequireRole("admin"), adminH.CreateCommand)
 	admin.Get("/commands/:id", adminH.GetCommand)
+
+	// === Admin deployment-token CRUD ===
+	admin.Get("/deployment-tokens", deploymentH.List)
+	admin.Post("/deployment-tokens", middleware.RequireRole("admin"), deploymentH.Create)
+	admin.Post("/deployment-tokens/:id/revoke", middleware.RequireRole("admin"), deploymentH.Revoke)
+	admin.Post("/deployment-tokens/:id/activate", middleware.RequireRole("admin"), deploymentH.Activate)
 
 	return app
 }

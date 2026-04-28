@@ -5,11 +5,15 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,9 +39,28 @@ func main() {
 }
 
 func run() error {
-	code, apiBase, err := promptForInputs()
+	apiBase := resolveAPIBase()
+
+	// Try to fetch the active deployment token from the server first.
+	// If the admin has published one, we use the bulk-enroll flow which
+	// only asks the employee for their email — no copy-pasting codes.
+	deploymentCode, _ := fetchDeploymentCode(apiBase)
+
+	if deploymentCode != "" {
+		return runEnroll(apiBase, deploymentCode)
+	}
+	return runRegister(apiBase)
+}
+
+// runEnroll is the bulk path: server has an active deployment token, so
+// the employee only types their email and the agent self-enrolls.
+func runEnroll(apiBase, deploymentCode string) error {
+	email, err := showEmailDialog(apiBase)
 	if err != nil {
 		return err
+	}
+	if email == "" {
+		return errors.New("user cancelled")
 	}
 
 	dataDir, err := dataDir()
@@ -45,9 +68,40 @@ func run() error {
 		return err
 	}
 
-	// Stop any prior agent instance so the agent.exe payload write below
-	// is not blocked by a held file handle. taskkill is a no-op (logged)
-	// when no matching process exists.
+	killExistingAgent()
+
+	if err := extractPayload(dataDir); err != nil {
+		return fmt.Errorf("extract payload: %w", err)
+	}
+
+	agentExe := filepath.Join(dataDir, "agent.exe")
+	if err := enrollAgent(agentExe, apiBase, deploymentCode, email); err != nil {
+		return fmt.Errorf("enroll agent: %w", err)
+	}
+
+	showSuccess(fmt.Sprintf(
+		"Cài đặt thành công!\n\nNhân viên: %s\nThư mục: %s\nAgent đã khởi động và sẽ tự chạy mỗi khi đăng nhập.",
+		email, dataDir,
+	))
+	return nil
+}
+
+// runRegister is the legacy path: no deployment token configured, so
+// fall back to the per-employee onboarding code prompt.
+func runRegister(apiBase string) error {
+	code, err := showInstallDialog(apiBase)
+	if err != nil {
+		return err
+	}
+	if code == "" {
+		return errors.New("user cancelled")
+	}
+
+	dataDir, err := dataDir()
+	if err != nil {
+		return err
+	}
+
 	killExistingAgent()
 
 	if err := extractPayload(dataDir); err != nil {
@@ -64,6 +118,44 @@ func run() error {
 		dataDir, maskCode(code),
 	))
 	return nil
+}
+
+// fetchDeploymentCode hits the public /install/config endpoint to learn
+// the active deployment code. Errors and 404 are non-fatal — we fall
+// back to the manual register flow instead of aborting.
+func fetchDeploymentCode(apiBase string) (string, error) {
+	u, err := url.JoinPath(apiBase, "/api/v1/install/config")
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("install config: status %d", resp.StatusCode)
+	}
+
+	var cfg struct {
+		DeploymentCode string `json:"deployment_code"`
+		Available      bool   `json:"available"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+		return "", err
+	}
+	if !cfg.Available {
+		return "", nil
+	}
+	return cfg.DeploymentCode, nil
 }
 
 func dataDir() (string, error) {
@@ -187,25 +279,24 @@ func registerAgent(agentExe, apiBase, code string) error {
 	return nil
 }
 
+func enrollAgent(agentExe, apiBase, deploymentCode, employeeEmail string) error {
+	cmd := newHiddenCommand(agentExe,
+		"-api", apiBase,
+		"-enroll", deploymentCode,
+		"-email", employeeEmail,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("agent: %w: %s", err, string(out))
+	}
+	return nil
+}
+
 func resolveAPIBase() string {
 	if v := os.Getenv(apiBaseEnv); v != "" {
 		return v
 	}
 	return defaultAPIBase
-}
-
-// === GUI helpers (delegated to gui_windows.go for a single-window flow) ===
-
-func promptForInputs() (code, apiBase string, err error) {
-	apiBase = resolveAPIBase()
-	code, err = showInstallDialog(apiBase)
-	if err != nil {
-		return "", "", err
-	}
-	if code == "" {
-		return "", "", errors.New("user cancelled")
-	}
-	return code, apiBase, nil
 }
 
 func maskCode(code string) string {

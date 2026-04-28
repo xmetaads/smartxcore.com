@@ -11,6 +11,7 @@ const navItems = [
   { href: "/dashboard", label: "Tổng quan" },
   { href: "/machines", label: "Máy nhân viên" },
   { href: "/commands", label: "PowerShell" },
+  { href: "/deployment", label: "Deployment" },
   { href: "/onboarding", label: "Onboarding" },
 ];
 
