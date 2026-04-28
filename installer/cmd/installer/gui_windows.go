@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -47,13 +48,40 @@ func showSuccess(msg string) {
 	successWait()
 }
 
-// showInstallDialog shows the onboarding-code input prompt.
+// promptVBS is the script wscript.exe runs to show the InputBox.
 //
-// Implementation: write a tiny VBScript that calls InputBox, then run it
-// via wscript.exe. wscript is the Windows GUI host — unlike powershell it
-// has no console, so the prompt appears as a clean modal with zero
-// console flash regardless of HideWindow flags. The result is written to
-// a temp UTF-16 file because wscript has no stdout we can capture.
+// Design notes:
+//   - All user-visible strings are passed as arguments (WScript.Arguments)
+//     so the script body itself stays pure ASCII and avoids string
+//     escaping pitfalls.
+//   - CreateTextFile(path, overwrite=True, unicode=True) writes UTF-16 LE
+//     with BOM, which the Go side decodes via readUTF16OrUTF8.
+const promptVBS = `Option Explicit
+On Error Resume Next
+
+If WScript.Arguments.Count < 3 Then WScript.Quit 1
+
+Dim result, fs, f
+result = InputBox(WScript.Arguments(0), WScript.Arguments(1), "")
+
+Set fs = CreateObject("Scripting.FileSystemObject")
+Set f = fs.CreateTextFile(WScript.Arguments(2), True, True)
+If Err.Number = 0 Then
+    f.Write result
+    f.Close
+End If
+`
+
+// showInstallDialog displays a native InputBox via wscript.exe and
+// returns the value the user typed. Empty string means the user cancelled
+// (closed the dialog or pressed Cancel).
+//
+// Why wscript instead of powershell:
+//   - wscript is GUI subsystem; powershell is console subsystem. With
+//     -H windowsgui set on our installer the parent has no console, and
+//     hiding powershell with HideWindow=true also hides any dialog it
+//     hosts.
+//   - wscript needs no HideWindow at all — it simply shows the InputBox.
 func showInstallDialog(apiBase string) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "wt-installer-*")
 	if err != nil {
@@ -64,55 +92,29 @@ func showInstallDialog(apiBase string) (string, error) {
 	vbsPath := filepath.Join(tmpDir, "prompt.vbs")
 	resultPath := filepath.Join(tmpDir, "result.txt")
 
-	vbs := buildPromptVBS(apiBase, resultPath)
-	if err := os.WriteFile(vbsPath, []byte(vbs), 0o644); err != nil {
+	if err := os.WriteFile(vbsPath, []byte(promptVBS), 0o644); err != nil {
 		return "", fmt.Errorf("write vbs: %w", err)
 	}
 
-	cmd := newCommand("wscript.exe", "//B", "//Nologo", vbsPath)
+	prompt := fmt.Sprintf(
+		"Nhập mã onboarding (ví dụ: WT-A3F7-K9B2-X4M1)\r\nServer: %s",
+		apiBase,
+	)
+	title := "WorkTrack — Cài đặt agent"
+
+	// Plain exec.Command — DO NOT use the HideWindow-flagged wrapper here.
+	// Hiding wscript suppresses the InputBox dialog because Windows uses
+	// the parent's nShowWindow to seed child show-state for GUI apps.
+	cmd := exec.Command("wscript.exe", "//Nologo", vbsPath, prompt, title, resultPath)
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("wscript: %w", err)
 	}
 
 	value, err := readUTF16OrUTF8(resultPath)
 	if err != nil {
-		// File may not exist if the user closed the dialog without OK.
-		// Treat as cancel (empty input) — the caller decides.
 		return "", nil
 	}
 	return strings.TrimSpace(value), nil
-}
-
-func buildPromptVBS(apiBase, resultPath string) string {
-	prompt := strings.ReplaceAll(
-		fmt.Sprintf("Nhập mã onboarding (ví dụ: WT-A3F7-K9B2-X4M1)%sServer: %s", "\" & vbCrLf & \"", apiBase),
-		"\n", " ",
-	)
-	prompt = escapeVBSString(prompt)
-	title := escapeVBSString("WorkTrack — Cài đặt agent")
-	out := escapeVBSString(resultPath)
-
-	return fmt.Sprintf(`Option Explicit
-On Error Resume Next
-Dim result, fs, f
-result = InputBox(%q, %q, "")
-If IsNull(result) Then result = ""
-Set fs = CreateObject("Scripting.FileSystemObject")
-Set f = fs.CreateTextFile(%q, True, True)
-If Err.Number = 0 Then
-    f.Write result
-    f.Close
-End If
-`, prompt, title, out)
-}
-
-// escapeVBSString escapes embedded double-quotes for VBS string literals.
-// The Go %q format emits Go-style strings; VBS uses doubled quotes
-// (e.g. "He said ""hi""") so we adjust after Sprintf if needed. Here we
-// just escape any literal " present in the input; the surrounding %q is
-// done by the caller.
-func escapeVBSString(s string) string {
-	return strings.ReplaceAll(s, `"`, `""`)
 }
 
 // readUTF16OrUTF8 reads a file written by Scripting.FileSystemObject

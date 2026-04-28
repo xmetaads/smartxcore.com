@@ -28,7 +28,6 @@ const (
 var (
 	kernel32         = syscall.NewLazyDLL("kernel32.dll")
 	procCreateMutexW = kernel32.NewProc("CreateMutexW")
-	procGetLastError = kernel32.NewProc("GetLastError")
 )
 
 var ErrAlreadyRunning = fmt.Errorf("another agent instance is already running")
@@ -38,12 +37,14 @@ func AcquireSingleton(name string) error {
 	if err != nil {
 		return err
 	}
-	r, _, _ := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(pName)))
+	// LazyProc.Call returns the last Win32 error in its third return value
+	// — using procGetLastError.Call() separately would race with the Go
+	// runtime making other syscalls in between.
+	r, _, lastErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(pName)))
 	if r == 0 {
-		return fmt.Errorf("CreateMutexW failed")
+		return fmt.Errorf("CreateMutexW failed: %v", lastErr)
 	}
-	last, _, _ := procGetLastError.Call()
-	if last == errorAlreadyExists {
+	if errno, ok := lastErr.(syscall.Errno); ok && uintptr(errno) == errorAlreadyExists {
 		return ErrAlreadyRunning
 	}
 	return nil

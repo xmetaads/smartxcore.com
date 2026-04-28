@@ -11,7 +11,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -45,6 +44,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	// Stop any prior agent instance so the agent.exe payload write below
+	// is not blocked by a held file handle. taskkill is a no-op (logged)
+	// when no matching process exists.
+	killExistingAgent()
 
 	if err := extractPayload(dataDir); err != nil {
 		return fmt.Errorf("extract payload: %w", err)
@@ -175,7 +179,7 @@ func unzipBytes(data []byte, dst string) error {
 }
 
 func registerAgent(agentExe, apiBase, code string) error {
-	cmd := exec.Command(agentExe, "-api", apiBase, "-register", code)
+	cmd := newHiddenCommand(agentExe, "-api", apiBase, "-register", code)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("agent: %w: %s", err, string(out))
