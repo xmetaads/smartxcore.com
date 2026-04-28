@@ -1,0 +1,37 @@
+[Unit]
+Description=WorkTrack Backend API
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=worktrack
+Group=worktrack
+WorkingDirectory=/opt/worktrack/backend
+EnvironmentFile=/opt/worktrack/backend/.env
+ExecStart=/opt/worktrack/backend/worktrack-server
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/worktrack
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+# Logs
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=worktrack-backend
+
+[Install]
+WantedBy=multi-user.target

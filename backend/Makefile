@@ -15,13 +15,19 @@ help:
 	@echo "  migrate-up    - apply migrations"
 	@echo "  migrate-down  - rollback last migration"
 
-build:
+build: build-server build-cli
+
+build-server:
 	go build -ldflags="-s -w -X main.Version=$(VERSION)" -o $(BINARY) ./cmd/server
+
+build-cli:
+	go build -ldflags="-s -w" -o bin/worktrack-cli ./cmd/worktrack-cli
 
 build-windows:
 	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$(VERSION)" -o $(BINARY_WIN) ./cmd/server
+	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o bin/worktrack-cli.exe ./cmd/worktrack-cli
 
-run: build
+run: build-server
 	./$(BINARY)
 
 dev:

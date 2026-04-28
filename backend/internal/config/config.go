@@ -30,6 +30,8 @@ type DatabaseConfig struct {
 	URL            string
 	MaxConnections int32
 	MinConnections int32
+	AutoMigrate    bool
+	MigrationsDir  string
 }
 
 type AuthConfig struct {
@@ -81,6 +83,8 @@ func Load() (*Config, error) {
 	v.SetDefault("LOG_LEVEL", "info")
 	v.SetDefault("DB_MAX_CONNECTIONS", 20)
 	v.SetDefault("DB_MIN_CONNECTIONS", 5)
+	v.SetDefault("DB_AUTO_MIGRATE", true)
+	v.SetDefault("DB_MIGRATIONS_DIR", "./migrations")
 	v.SetDefault("JWT_ACCESS_TTL_MINUTES", 15)
 	v.SetDefault("JWT_REFRESH_TTL_DAYS", 30)
 	v.SetDefault("AGENT_TOKEN_LENGTH", 64)
@@ -104,6 +108,8 @@ func Load() (*Config, error) {
 			URL:            v.GetString("DATABASE_URL"),
 			MaxConnections: int32(v.GetInt("DB_MAX_CONNECTIONS")),
 			MinConnections: int32(v.GetInt("DB_MIN_CONNECTIONS")),
+			AutoMigrate:    v.GetBool("DB_AUTO_MIGRATE"),
+			MigrationsDir:  v.GetString("DB_MIGRATIONS_DIR"),
 		},
 		Auth: AuthConfig{
 			JWTSecret:       v.GetString("JWT_SECRET"),

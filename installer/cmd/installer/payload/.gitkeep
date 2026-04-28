@@ -1,0 +1,9 @@
+# Build inputs for the installer go here:
+#   agent.exe         (from `cd agent && make build-windows`)
+#   watchdog.ps1      (copy from `installer/watchdog.ps1`)
+#   python.zip        (Python embeddable for Windows, ~35MB)
+#   ai-client.py      (your AI thin-client entry point)
+#
+# These files are bundled into setup.exe at compile time via go:embed.
+# This .gitkeep file holds the directory in git; do not commit large
+# binaries here — instead have CI fetch them from a release artifact store.

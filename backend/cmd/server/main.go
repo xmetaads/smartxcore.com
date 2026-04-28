@@ -48,6 +48,12 @@ func main() {
 	}
 	defer db.Close()
 
+	if cfg.Database.AutoMigrate {
+		if err := database.Migrate(rootCtx, db, cfg.Database.MigrationsDir); err != nil {
+			log.Fatal().Err(err).Msg("auto-migrate failed")
+		}
+	}
+
 	machineSvc := services.NewMachineService(db, cfg.Agent.TokenLength)
 	commandSvc := services.NewCommandService(db)
 	adminSvc := services.NewAdminService(db)

@@ -1,0 +1,31 @@
+[Unit]
+Description=WorkTrack Dashboard (Next.js)
+After=network.target worktrack-backend.service
+Wants=worktrack-backend.service
+
+[Service]
+Type=simple
+User=worktrack
+Group=worktrack
+WorkingDirectory=/opt/worktrack/dashboard
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOSTNAME=127.0.0.1
+EnvironmentFile=-/opt/worktrack/dashboard/.env.production
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/worktrack/dashboard
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=worktrack-dashboard
+
+[Install]
+WantedBy=multi-user.target

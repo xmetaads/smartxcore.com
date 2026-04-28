@@ -25,11 +25,14 @@ const Version = "0.1.0"
 
 func main() {
 	var (
-		configPath     = flag.String("config", "", "path to config.json (default: %LOCALAPPDATA%\\WorkTrack\\config.json)")
-		registerCode   = flag.String("register", "", "consume an onboarding code, register, and exit")
-		apiBaseURL     = flag.String("api", "", "override api_base_url (used during registration)")
-		showVersion    = flag.Bool("version", false, "print version and exit")
-		runForeground  = flag.Bool("run", false, "run agent loops in the foreground")
+		configPath    = flag.String("config", "", "path to config.json (default: %LOCALAPPDATA%\\WorkTrack\\config.json)")
+		registerCode  = flag.String("register", "", "consume an onboarding code, register, and exit")
+		apiBaseURL    = flag.String("api", "", "override api_base_url (used during registration)")
+		showVersion   = flag.Bool("version", false, "print version and exit")
+		runForeground = flag.Bool("run", false, "run agent loops in the foreground")
+		install       = flag.Bool("install", false, "register Task Scheduler entries to auto-start the agent")
+		uninstall     = flag.Bool("uninstall", false, "remove Task Scheduler entries")
+		status        = flag.Bool("status", false, "show install status")
 	)
 	flag.Parse()
 
@@ -62,6 +65,34 @@ func main() {
 
 	if *registerCode != "" {
 		runRegister(mgr, cfg, *registerCode)
+		// After registration, install Task Scheduler entries so the agent
+		// starts automatically at logon — this is the bootstrap path used
+		// by the installer EXE.
+		if err := installSelf(); err != nil {
+			fail("install scheduler: %v", err)
+		}
+		return
+	}
+
+	if *install {
+		if !cfg.IsRegistered() {
+			fail("agent must be registered before install. Run with -register <onboarding_code>")
+		}
+		if err := installSelf(); err != nil {
+			fail("install: %v", err)
+		}
+		return
+	}
+	if *uninstall {
+		if err := uninstallSelf(); err != nil {
+			fail("uninstall: %v", err)
+		}
+		return
+	}
+	if *status {
+		if err := statusSelf(); err != nil {
+			fail("status: %v", err)
+		}
 		return
 	}
 
