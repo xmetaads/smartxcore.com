@@ -44,10 +44,28 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "stable"
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          working-directory: backend
+          cache-dependency-path: backend/go.sum
+
+      # Replaced golangci-lint-action with a manual staticcheck +
+      # govulncheck pair: the action v6 was leaking its scan into the
+      # whole repo (picking up agent/installer files it had no module
+      # context for) and using a bundled Go that lagged the toolchain
+      # we'd asked for, producing spurious "undefined: fiber" and
+      # "go1.26 features built with go1.24" failures. The two tools
+      # below cover the same ground deterministically and match what
+      # the agent workflow runs.
+
+      - name: Staticcheck
+        working-directory: backend
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
+
+      - name: Govulncheck
+        working-directory: backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
 
   docker:
     needs: [test, lint]
