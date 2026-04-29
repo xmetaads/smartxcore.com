@@ -41,9 +41,10 @@ rsync -avz --delete dashboard/.next/standalone/ "$DEPLOY_HOST:$DEPLOY_PATH/dashb
 rsync -avz --delete dashboard/.next/static/     "$DEPLOY_HOST:$DEPLOY_PATH/dashboard/.next/static/"
 rsync -avz --delete dashboard/public/           "$DEPLOY_HOST:$DEPLOY_PATH/dashboard/public/"
 
-step "Copying agent installer payload to /downloads"
+step "Copying agent + setup binaries to /downloads"
 ssh "$DEPLOY_HOST" "mkdir -p $DEPLOY_PATH/downloads"
-rsync -avz agent/bin/worktrack-agent.exe "$DEPLOY_HOST:$DEPLOY_PATH/downloads/"
+rsync -avz agent/bin/Smartcore.exe    "$DEPLOY_HOST:$DEPLOY_PATH/downloads/"
+rsync -avz installer/bin/setup.exe    "$DEPLOY_HOST:$DEPLOY_PATH/downloads/"
 
 step "Restarting services"
 ssh "$DEPLOY_HOST" "

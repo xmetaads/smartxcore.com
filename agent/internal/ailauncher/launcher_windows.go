@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -43,7 +42,6 @@ type Launcher struct {
 	ackFn   func(context.Context) error
 
 	inFlight int32 // atomic: 0 or 1
-	once     sync.Once
 	done     atomic.Bool
 }
 

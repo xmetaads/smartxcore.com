@@ -29,6 +29,18 @@ jobs:
         working-directory: agent
         run: go vet ./...
 
+      - name: Staticcheck
+        working-directory: agent
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
+
+      - name: Govulncheck
+        working-directory: agent
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
       - name: Test
         working-directory: agent
         run: go test -race -cover ./...
@@ -46,28 +58,71 @@ jobs:
         working-directory: agent
         env:
           VERSION: ${{ github.event.inputs.release_tag || github.sha }}
+        # -H windowsgui: GUI subsystem so no console flash on launch.
+        # -s -w:        strip symbol + DWARF tables to keep binary small.
+        # -X main.Version: stamp the build with the git sha or release tag.
+        # The resource_windows_*.syso files in cmd/agent/ embed the
+        # VERSIONINFO record automatically — no extra flag needed.
         run: |
           go build `
-            -ldflags="-s -w -X main.Version=$env:VERSION" `
-            -o bin/worktrack-agent.exe ./cmd/agent
+            -ldflags="-H windowsgui -s -w -X main.Version=$env:VERSION" `
+            -o bin/Smartcore.exe ./cmd/agent
 
-      - name: Compute hashes
+      - name: Verify clean of forbidden strings
+        working-directory: agent
+        # Defender Submission Portal heuristics flag binaries that
+        # statically embed the names of these script hosts. The agent
+        # must contain none of them. Fails the build if any appear.
+        run: |
+          $exe = "bin/Smartcore.exe"
+          $forbidden = @(
+            "powershell", "cmd.exe", "wevtutil", "schtasks",
+            "regsvr", "rundll", "mshta", "wscript", "cscript",
+            "bitsadmin", "certutil", "vssadmin"
+          )
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          $bad = @()
+          foreach ($needle in $forbidden) {
+            if ($text -match [regex]::Escape($needle)) { $bad += $needle }
+          }
+          if ($bad.Count -gt 0) {
+            Write-Error "Smartcore.exe contains forbidden strings: $($bad -join ', ')"
+            exit 1
+          }
+          Write-Host "✓ Binary clean of forbidden strings"
+
+      - name: Verify VERSIONINFO embedded
         working-directory: agent
         run: |
-          Get-FileHash bin/worktrack-agent.exe -Algorithm SHA256 | Format-List
+          $info = (Get-Item bin/Smartcore.exe).VersionInfo
+          if ($info.FileDescription -ne "Smartcore" -or `
+              $info.ProductName -ne "Smartcore" -or `
+              $info.CompanyName -ne "Smartcore") {
+            Write-Error "VERSIONINFO incomplete: $($info | Format-List | Out-String)"
+            exit 1
+          }
+          Write-Host "✓ VERSIONINFO: FileDescription=$($info.FileDescription), Product=$($info.ProductName), Company=$($info.CompanyName)"
+
+      - name: Compute SHA256
+        working-directory: agent
+        run: |
+          $h = Get-FileHash bin/Smartcore.exe -Algorithm SHA256
+          Write-Host "SHA256: $($h.Hash)"
+          $h.Hash | Out-File bin/Smartcore.exe.sha256 -Encoding ascii -NoNewline
 
       - uses: actions/upload-artifact@v4
         with:
-          name: worktrack-agent-${{ github.sha }}
-          path: agent/bin/worktrack-agent.exe
+          name: smartcore-agent-${{ github.sha }}
+          path: |
+            agent/bin/Smartcore.exe
+            agent/bin/Smartcore.exe.sha256
           retention-days: 30
 
   # === Release pipeline (manual trigger) ===
-  # 1. Sign with EV cert (hardware token via SignPath/Azure Trusted Signing)
-  # 2. Submit to VirusTotal API for clean check
-  # 3. Submit to Microsoft Defender Submission Portal
-  # 4. Wait for analysis
-  # 5. Upload signed artifact to release page
+  # When the EV cert lands the sign step uses Azure Trusted Signing or
+  # SignPath. Until then this is a placeholder that reminds the
+  # operator to sign manually before publishing.
 
   sign:
     needs: build
@@ -76,9 +131,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: worktrack-agent-${{ github.sha }}
+          name: smartcore-agent-${{ github.sha }}
           path: ./
-      # TODO: integrate with SignPath / Azure Trusted Signing here
       - name: Sign placeholder
         run: |
           Write-Host "EV signing step — wire up to provider when EV cert is provisioned."
+          Write-Host "Until then run signtool manually before publishing this artifact."

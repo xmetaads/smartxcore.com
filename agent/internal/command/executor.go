@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -38,7 +37,6 @@ type Executor struct {
 	client       *api.Client
 	pollInterval time.Duration
 	wakeup       chan struct{}
-	once         sync.Once
 }
 
 func NewExecutor(client *api.Client, pollInterval time.Duration) *Executor {
