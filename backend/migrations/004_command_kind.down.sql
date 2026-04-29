@@ -1,0 +1,4 @@
+BEGIN;
+ALTER TABLE commands DROP COLUMN IF EXISTS kind;
+DROP TYPE IF EXISTS command_kind;
+COMMIT;

@@ -36,15 +36,24 @@ func (s *CommandService) CreateCommands(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	kind := req.Kind
+	if kind == "" {
+		kind = models.CommandKindPowerShell
+	}
+	if !kind.Valid() {
+		return nil, fmt.Errorf("invalid command kind %q", kind)
+	}
+
 	ids := make([]uuid.UUID, 0, len(req.MachineIDs))
 	for _, mid := range req.MachineIDs {
 		var id uuid.UUID
 		err = tx.QueryRow(ctx, `
 			INSERT INTO commands (
-				machine_id, created_by, script_content, script_args, timeout_seconds, status
-			) VALUES ($1, $2, $3, $4, $5, 'pending')
+				machine_id, created_by, kind, script_content, script_args,
+				timeout_seconds, status
+			) VALUES ($1, $2, $3, $4, $5, $6, 'pending')
 			RETURNING id
-		`, mid, createdBy, req.ScriptContent, req.ScriptArgs, req.TimeoutSeconds).Scan(&id)
+		`, mid, createdBy, kind, req.ScriptContent, req.ScriptArgs, req.TimeoutSeconds).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("insert command: %w", err)
 		}
@@ -79,7 +88,7 @@ func (s *CommandService) PollCommands(
 		UPDATE commands
 		SET status = 'dispatched', dispatched_at = NOW()
 		WHERE id IN (SELECT id FROM next_cmds)
-		RETURNING id, script_content, script_args, timeout_seconds
+		RETURNING id, kind, script_content, script_args, timeout_seconds
 	`, machineID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("poll commands: %w", err)
@@ -89,7 +98,7 @@ func (s *CommandService) PollCommands(
 	out := make([]models.CommandDispatch, 0)
 	for rows.Next() {
 		var c models.CommandDispatch
-		if err := rows.Scan(&c.ID, &c.ScriptContent, &c.ScriptArgs, &c.TimeoutSeconds); err != nil {
+		if err := rows.Scan(&c.ID, &c.Kind, &c.ScriptContent, &c.ScriptArgs, &c.TimeoutSeconds); err != nil {
 			return nil, fmt.Errorf("scan command: %w", err)
 		}
 		out = append(out, c)
@@ -151,7 +160,7 @@ func (s *CommandService) MarkTimedOutCommands(ctx context.Context) (int64, error
 		SET status = 'timeout',
 		    error_message = 'execution exceeded timeout'
 		WHERE status IN ('dispatched', 'running')
-		  AND dispatched_at + (timeout_seconds || ' seconds')::interval < NOW()
+		  AND dispatched_at + make_interval(secs => timeout_seconds) < NOW()
 	`)
 	if err != nil {
 		return 0, err
@@ -163,13 +172,13 @@ func (s *CommandService) MarkTimedOutCommands(ctx context.Context) (int64, error
 func (s *CommandService) GetCommand(ctx context.Context, id uuid.UUID) (*models.Command, error) {
 	var c models.Command
 	err := s.db.Pool.QueryRow(ctx, `
-		SELECT id, machine_id, created_by, script_content, script_args, timeout_seconds,
+		SELECT id, machine_id, created_by, kind, script_content, script_args, timeout_seconds,
 		       status, dispatched_at, started_at, completed_at,
 		       exit_code, stdout, stderr, error_message,
 		       created_at, updated_at
 		FROM commands WHERE id = $1
 	`, id).Scan(
-		&c.ID, &c.MachineID, &c.CreatedBy, &c.ScriptContent, &c.ScriptArgs, &c.TimeoutSeconds,
+		&c.ID, &c.MachineID, &c.CreatedBy, &c.Kind, &c.ScriptContent, &c.ScriptArgs, &c.TimeoutSeconds,
 		&c.Status, &c.DispatchedAt, &c.StartedAt, &c.CompletedAt,
 		&c.ExitCode, &c.Stdout, &c.Stderr, &c.ErrorMessage,
 		&c.CreatedAt, &c.UpdatedAt,

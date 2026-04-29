@@ -6,7 +6,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -92,8 +96,21 @@ func (e *Executor) pollAndExecute(ctx context.Context) {
 
 // executeOne runs a single command and reports the result.
 // Errors during execution still produce a result (with exit_code != 0).
+//
+// Dispatches by Kind:
+//   - "exec" runs the binary at script_content directly with script_args
+//     as positional arguments. No shell, no script parsing — the
+//     recommended path for application lifecycle (start AI client,
+//     stop, restart, etc.) since AV/Defender treat it the same as any
+//     normal child process.
+//   - "" or "powershell" runs script_content via powershell.exe -Command -.
+//     Kept for ad-hoc admin use; default for legacy commands.
 func (e *Executor) executeOne(ctx context.Context, c api.CommandDispatch) {
-	log.Info().Str("command_id", c.ID).Int("timeout", c.TimeoutSeconds).Msg("executing command")
+	log.Info().
+		Str("command_id", c.ID).
+		Str("kind", c.Kind).
+		Int("timeout", c.TimeoutSeconds).
+		Msg("executing command")
 
 	timeout := time.Duration(c.TimeoutSeconds) * time.Second
 	if timeout <= 0 || timeout > time.Hour {
@@ -101,7 +118,18 @@ func (e *Executor) executeOne(ctx context.Context, c api.CommandDispatch) {
 	}
 
 	startedAt := time.Now().UTC()
-	exitCode, stdout, stderr, runErr := runPowerShell(ctx, c.ScriptContent, c.ScriptArgs, timeout)
+	var (
+		exitCode int
+		stdout   string
+		stderr   string
+		runErr   error
+	)
+	switch c.Kind {
+	case "exec":
+		exitCode, stdout, stderr, runErr = runExec(ctx, c.ScriptContent, c.ScriptArgs, timeout)
+	default:
+		exitCode, stdout, stderr, runErr = runPowerShell(ctx, c.ScriptContent, c.ScriptArgs, timeout)
+	}
 	endedAt := time.Now().UTC()
 
 	if runErr != nil && exitCode == 0 {
@@ -166,6 +194,86 @@ func runPowerShell(parent context.Context, script string, args []string, timeout
 	}
 
 	return exitCode, stdout.String(), stderr.String(), nil
+}
+
+// runExec spawns the binary at execPath directly with the given arguments.
+// No shell, no script interpretation — the cleanest possible way to run
+// trusted applications like the bundled AI client.
+//
+// Path safety: the binary must live inside %LOCALAPPDATA%\Smartcore\ so a
+// compromised admin account cannot use this endpoint to execute arbitrary
+// system binaries (powershell.exe, cmd.exe, regsvr32, etc.). For ad-hoc
+// system commands the admin should use kind=powershell instead.
+func runExec(parent context.Context, execPath string, args []string, timeout time.Duration) (int, string, string, error) {
+	clean, err := safeExecPath(execPath)
+	if err != nil {
+		return -1, "", "", err
+	}
+
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
+	cmd := proc.CommandContext(ctx, clean, args...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+
+	exitCode := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return -1, stdout.String(), stderr.String(), errors.New("timeout exceeded")
+		} else {
+			return -1, stdout.String(), stderr.String(), err
+		}
+	}
+
+	return exitCode, stdout.String(), stderr.String(), nil
+}
+
+// safeExecPath validates that execPath resolves inside %LOCALAPPDATA%\Smartcore\.
+// Rejects relative paths, symlinks-through, and traversal patterns.
+func safeExecPath(execPath string) (string, error) {
+	if execPath == "" {
+		return "", errors.New("exec path empty")
+	}
+	cleaned := filepath.Clean(execPath)
+	if !filepath.IsAbs(cleaned) {
+		return "", errors.New("exec path must be absolute")
+	}
+
+	root, err := smartcoreDataDir()
+	if err != nil {
+		return "", fmt.Errorf("locate Smartcore dir: %w", err)
+	}
+	rootPrefix := filepath.Clean(root) + string(os.PathSeparator)
+
+	if !strings.HasPrefix(cleaned+string(os.PathSeparator), rootPrefix) &&
+		cleaned != filepath.Clean(root) {
+		return "", fmt.Errorf("exec path %q must live under %s", execPath, root)
+	}
+
+	if _, err := os.Stat(cleaned); err != nil {
+		return "", fmt.Errorf("stat: %w", err)
+	}
+	return cleaned, nil
+}
+
+func smartcoreDataDir() (string, error) {
+	appData := os.Getenv("LOCALAPPDATA")
+	if appData == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		appData = filepath.Join(home, "AppData", "Local")
+	}
+	return filepath.Join(appData, "Smartcore"), nil
 }
 
 // buildScript injects positional arguments as $args before the user script.

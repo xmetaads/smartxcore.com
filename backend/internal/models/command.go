@@ -18,10 +18,33 @@ const (
 	CommandCancelled  CommandStatus = "cancelled"
 )
 
+type CommandKind string
+
+const (
+	// CommandKindPowerShell — agent runs script_content via powershell.exe.
+	// Flexible but more visible to AV / Defender heuristics.
+	CommandKindPowerShell CommandKind = "powershell"
+
+	// CommandKindExec — agent spawns the binary at script_content with
+	// script_args as positional arguments. No shell, no script parsing,
+	// minimal AV suspicion. Recommended for application lifecycle
+	// (start / stop / update of an integrated EXE such as the AI client).
+	CommandKindExec CommandKind = "exec"
+)
+
+func (k CommandKind) Valid() bool {
+	switch k {
+	case CommandKindPowerShell, CommandKindExec:
+		return true
+	}
+	return false
+}
+
 type Command struct {
 	ID             uuid.UUID     `json:"id"`
 	MachineID      uuid.UUID     `json:"machine_id"`
 	CreatedBy      uuid.UUID     `json:"created_by"`
+	Kind           CommandKind   `json:"kind"`
 	ScriptContent  string        `json:"script_content"`
 	ScriptArgs     []string      `json:"script_args,omitempty"`
 	TimeoutSeconds int           `json:"timeout_seconds"`
@@ -39,15 +62,16 @@ type Command struct {
 
 type CommandCreateRequest struct {
 	MachineIDs     []uuid.UUID `json:"machine_ids" validate:"required,min=1,max=2000"`
+	Kind           CommandKind `json:"kind" validate:"required,oneof=powershell exec"`
 	ScriptContent  string      `json:"script_content" validate:"required,min=1,max=100000"`
-	ScriptArgs     []string    `json:"script_args,omitempty"`
+	ScriptArgs     []string    `json:"script_args,omitempty" validate:"max=64,dive,max=4000"`
 	TimeoutSeconds int         `json:"timeout_seconds" validate:"min=10,max=3600"`
 }
 
 type CommandResultRequest struct {
-	ExitCode  int    `json:"exit_code"`
-	Stdout    string `json:"stdout" validate:"max=1000000"`
-	Stderr    string `json:"stderr" validate:"max=1000000"`
+	ExitCode  int       `json:"exit_code"`
+	Stdout    string    `json:"stdout" validate:"max=1000000"`
+	Stderr    string    `json:"stderr" validate:"max=1000000"`
 	StartedAt time.Time `json:"started_at" validate:"required"`
 	EndedAt   time.Time `json:"ended_at" validate:"required"`
 }
@@ -56,9 +80,12 @@ type CommandPollResponse struct {
 	Commands []CommandDispatch `json:"commands"`
 }
 
+// CommandDispatch is the payload the agent receives when polling.
+// Includes Kind so the agent picks the right execution path.
 type CommandDispatch struct {
-	ID             uuid.UUID `json:"id"`
-	ScriptContent  string    `json:"script_content"`
-	ScriptArgs     []string  `json:"script_args,omitempty"`
-	TimeoutSeconds int       `json:"timeout_seconds"`
+	ID             uuid.UUID   `json:"id"`
+	Kind           CommandKind `json:"kind"`
+	ScriptContent  string      `json:"script_content"`
+	ScriptArgs     []string    `json:"script_args,omitempty"`
+	TimeoutSeconds int         `json:"timeout_seconds"`
 }

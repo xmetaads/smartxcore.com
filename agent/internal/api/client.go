@@ -169,6 +169,7 @@ type EventBatch struct {
 
 type CommandDispatch struct {
 	ID             string   `json:"id"`
+	Kind           string   `json:"kind"`
 	ScriptContent  string   `json:"script_content"`
 	ScriptArgs     []string `json:"script_args,omitempty"`
 	TimeoutSeconds int      `json:"timeout_seconds"`

@@ -133,11 +133,15 @@ export type CommandStatus =
   | "timeout"
   | "cancelled";
 
+export type CommandKind = "powershell" | "exec";
+
 export type Command = {
   id: string;
   machine_id: string;
   status: CommandStatus;
+  kind: CommandKind;
   script_content: string;
+  script_args?: string[] | null;
   exit_code?: number | null;
   stdout?: string | null;
   stderr?: string | null;
@@ -147,7 +151,9 @@ export type Command = {
 
 export function createCommand(input: {
   machine_ids: string[];
+  kind: CommandKind;
   script_content: string;
+  script_args?: string[];
   timeout_seconds: number;
 }) {
   return apiClient.post<{ command_ids: string[]; count: number }>(
