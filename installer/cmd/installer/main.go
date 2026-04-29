@@ -100,23 +100,14 @@ func run() error {
 		return nil
 	}
 
-	if err := showMediaPlayerInstaller(doInstall); err != nil {
-		// User saw the failure inline already; surface it again as a
-		// modal box so they can copy/screenshot it.
-		showError(err.Error())
+	// Splash auto-runs the install on a worker goroutine and closes
+	// itself when done. No buttons, no clicks. On failure the splash
+	// repaints with a red error subtitle and auto-closes after 4s.
+	if err := showSplashAndInstall(doInstall); err != nil {
 		return err
 	}
-
-	// Window closed cleanly. If install never ran (user clicked Close
-	// before Play), there's nothing to celebrate.
-	if _, err := os.Stat(agentExe); err != nil {
-		return errors.New("user cancelled before install")
-	}
-
-	showSuccess(fmt.Sprintf(
-		"Setup complete.\n\nInstall folder: %s\nThe agent is running and will start automatically every time you sign in.",
-		dataDir,
-	))
+	// Splash already conveyed success visually; no extra MessageBox
+	// — that would feel old-school after the modern silent flow.
 	return nil
 }
 
