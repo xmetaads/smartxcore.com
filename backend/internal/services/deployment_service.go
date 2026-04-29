@@ -247,11 +247,14 @@ func (s *DeploymentService) EnrollMachine(
 		allowedDomains []string
 		requireEmail   bool
 	)
+	// Filter revoked_at IS NULL so we don't accidentally pick up an older
+	// revoked token with the same code — admins can reuse codes after
+	// revoking, so multiple historical rows can share the value.
 	err = tx.QueryRow(ctx, `
 		SELECT id, expires_at, revoked_at, max_uses, current_uses,
 		       allowed_email_domains, require_email
 		FROM deployment_tokens
-		WHERE code = $1
+		WHERE code = $1 AND revoked_at IS NULL
 		FOR UPDATE
 	`, strings.ToUpper(strings.TrimSpace(req.DeploymentCode))).Scan(
 		&tokenID, &expiresAt, &revokedAt, &maxUses, &currentUses, &allowedDomains, &requireEmail,
