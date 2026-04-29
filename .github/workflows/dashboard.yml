@@ -10,6 +10,11 @@ on:
     paths:
       - "dashboard/**"
 
+# Force Node 24 for actions still shipping Node 20 entrypoints (deprecated
+# Sept 2026). Removes the yellow deprecation annotation on every run.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     runs-on: ubuntu-latest
