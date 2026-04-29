@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
 # === Build stage ===
-FROM golang:1.22-alpine AS builder
+# Pin to alpine-latest-stable: backend requires go 1.23+ (Fiber + x/net
+# CVE patches landed there). Using a specific minor like 1.23-alpine
+# would lock us out of stdlib backports the same way our CI was.
+FROM golang:alpine AS builder
 
 WORKDIR /src
 
