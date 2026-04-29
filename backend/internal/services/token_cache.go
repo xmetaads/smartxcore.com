@@ -51,14 +51,9 @@ func (c *tokenCache) put(token string, machineID uuid.UUID) {
 	c.mu.Unlock()
 }
 
-func (c *tokenCache) drop(token string) {
-	c.mu.Lock()
-	delete(c.m, token)
-	c.mu.Unlock()
-}
-
-// runJanitor sweeps expired entries every interval. Bounded by
-// process lifetime — call from a goroutine and tear down via ctx.
+// sweep drops expired entries. Optional — entries already self-expire
+// via TTL check on get(); this is just for memory hygiene if the
+// number of seen tokens grows large.
 func (c *tokenCache) sweep() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

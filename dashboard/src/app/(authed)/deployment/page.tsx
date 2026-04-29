@@ -143,6 +143,8 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
       onCreated();
     },
     onError: (err) => {
+      // Server error messages are already in Vietnamese — surface them
+      // verbatim so users see "Mã đã được dùng…" instead of generic text.
       setError(err instanceof APIError ? err.message : "Tạo token thất bại");
     },
   });

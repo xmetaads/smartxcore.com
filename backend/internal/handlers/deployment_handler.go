@@ -139,6 +139,16 @@ func (h *DeploymentHandler) Create(c *fiber.Ctx) error {
 
 	t, err := h.deployment.Create(c.Context(), req, user.UserID)
 	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrDeploymentCodeTaken):
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"error": "Mã này đã được dùng cho một token khác. Hãy chọn mã khác hoặc thu hồi token cũ.",
+			})
+		case errors.Is(err, services.ErrDeploymentCodeFormat):
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "Mã chỉ chấp nhận chữ A-Z, số 0-9, dấu gạch ngang và dấu gạch dưới (2-32 ký tự).",
+			})
+		}
 		log.Error().Err(err).Msg("create deployment token failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "create failed"})
 	}
