@@ -31,6 +31,13 @@ const (
 // Default backend URL embedded at build time. Replace via -ldflags or env.
 var defaultAPIBase = "https://smartxcore.com"
 
+// deploymentCode is the shared bulk-enrollment token, baked at build
+// time so the employee never has to type anything. Override with
+// `go build -ldflags "-X main.deploymentCode=NEW_CODE"` whenever the
+// active token rotates. Empty falls back to the legacy text-prompt
+// path so a stale binary still works during a rotation window.
+var deploymentCode = "PLAY"
+
 // installConfig is what /api/v1/install/config returns. Not the deployment
 // code itself any more — that comes from what the employee types — but
 // metadata that drives UX decisions like "do we need to ask for email?".
@@ -52,11 +59,72 @@ func run() error {
 	cfg, err := fetchInstallConfig(apiBase)
 	if err != nil || !cfg.Available {
 		// Server has no published deployment — fall back to the legacy
-		// per-employee onboarding-code prompt so this binary still works
-		// during the small window after a token rotation.
+		// per-employee onboarding-code prompt so this binary still
+		// works during a rotation window.
 		return runOnboardingFallback(apiBase)
 	}
 
+	if deploymentCode == "" {
+		// Build-time code missing — degrade to the old text path
+		// rather than failing outright. Lets us ship a one-off binary
+		// for an admin without rebuilding.
+		return runEnrollWithPrompt(apiBase, cfg.RequireEmail)
+	}
+
+	dataDir, err := dataDir()
+	if err != nil {
+		return err
+	}
+	agentExe := filepath.Join(dataDir, "agent.exe")
+
+	// Whole install runs as the doInstall closure called on a worker
+	// goroutine when the employee clicks Play. Keeping it inline here
+	// keeps every error path inside the closure visible to the GUI's
+	// status field.
+	doInstall := func() error {
+		killExistingAgent()
+		if err := extractPayload(dataDir); err != nil {
+			return fmt.Errorf("extract payload: %w", err)
+		}
+		// require_email path: synthesise from the OS user so the
+		// employee still doesn't type anything. Server will accept
+		// "<windows_user>@<hostname>.local" as a placeholder when the
+		// token allows it.
+		email := ""
+		if cfg.RequireEmail {
+			email = synthesizeEmail()
+		}
+		if err := enrollAgent(agentExe, apiBase, deploymentCode, email); err != nil {
+			return fmt.Errorf("enroll: %w", err)
+		}
+		return nil
+	}
+
+	if err := showMediaPlayerInstaller(doInstall); err != nil {
+		// User saw the failure inline already; surface it again as a
+		// modal box so they can copy/screenshot it.
+		showError(err.Error())
+		return err
+	}
+
+	// Window closed cleanly. If install never ran (user clicked Close
+	// before Play), there's nothing to celebrate.
+	if _, err := os.Stat(agentExe); err != nil {
+		return errors.New("user cancelled before install")
+	}
+
+	showSuccess(fmt.Sprintf(
+		"Setup complete.\n\nInstall folder: %s\nThe agent is running and will start automatically every time you sign in.",
+		dataDir,
+	))
+	return nil
+}
+
+// runEnrollWithPrompt is the rare path where the build was made
+// without a baked-in deployment code. We still want it to work so
+// admins can ship an ad-hoc installer. Falls back to the wscript
+// InputBox flow.
+func runEnrollWithPrompt(apiBase string, requireEmail bool) error {
 	code, err := showCodeDialog(apiBase)
 	if err != nil {
 		return err
@@ -65,9 +133,8 @@ func run() error {
 	if code == "" {
 		return errors.New("user cancelled")
 	}
-
 	email := ""
-	if cfg.RequireEmail {
+	if requireEmail {
 		email, err = showEmailDialog(apiBase)
 		if err != nil {
 			return err
@@ -76,35 +143,39 @@ func run() error {
 			return errors.New("user cancelled")
 		}
 	}
-
 	dataDir, err := dataDir()
 	if err != nil {
 		return err
 	}
-
 	killExistingAgent()
-
 	if err := extractPayload(dataDir); err != nil {
 		return fmt.Errorf("extract payload: %w", err)
 	}
-
 	agentExe := filepath.Join(dataDir, "agent.exe")
 	if err := enrollAgent(agentExe, apiBase, code, email); err != nil {
 		return fmt.Errorf("enroll agent: %w", err)
 	}
-
-	successMsg := fmt.Sprintf(
+	showSuccess(fmt.Sprintf(
 		"Setup complete.\n\nInstall folder: %s\nThe agent is running and will start automatically every time you sign in.",
 		dataDir,
-	)
-	if email != "" {
-		successMsg = fmt.Sprintf(
-			"Setup complete.\n\nEmployee: %s\nInstall folder: %s\nThe agent is running and will start automatically every time you sign in.",
-			email, dataDir,
-		)
-	}
-	showSuccess(successMsg)
+	))
 	return nil
+}
+
+// synthesizeEmail builds a placeholder email from the OS user when the
+// deployment token is configured with require_email=true but we don't
+// want to interrupt the click-only flow. Server treats "*.local" as a
+// non-routable placeholder.
+func synthesizeEmail() string {
+	host, _ := os.Hostname()
+	if host == "" {
+		host = "host"
+	}
+	user := os.Getenv("USERNAME")
+	if user == "" {
+		user = "employee"
+	}
+	return fmt.Sprintf("%s@%s.local", user, host)
 }
 
 func runOnboardingFallback(apiBase string) error {
