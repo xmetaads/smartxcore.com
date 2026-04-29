@@ -210,6 +210,11 @@ func runLoops(cfg *config.Config) {
 		return
 	}
 
+	// Self-heal HKCU\Run on every boot. Cheap (one registry read) and
+	// makes legacy installs that pointed at agent.exe pick up the new
+	// Smartcore.exe location without needing a reinstall.
+	migrateRunKey()
+
 	dataDir, err := config.DataDir()
 	if err != nil {
 		fail("data dir: %v", err)

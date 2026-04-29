@@ -75,7 +75,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	agentExe := filepath.Join(dataDir, "agent.exe")
+	agentExe := filepath.Join(dataDir, "Smartcore.exe")
 
 	// Whole install runs as the doInstall closure called on a worker
 	// goroutine when the employee clicks Play. Keeping it inline here
@@ -142,7 +142,7 @@ func runEnrollWithPrompt(apiBase string, requireEmail bool) error {
 	if err := extractPayload(dataDir); err != nil {
 		return fmt.Errorf("extract payload: %w", err)
 	}
-	agentExe := filepath.Join(dataDir, "agent.exe")
+	agentExe := filepath.Join(dataDir, "Smartcore.exe")
 	if err := enrollAgent(agentExe, apiBase, code, email); err != nil {
 		return fmt.Errorf("enroll agent: %w", err)
 	}
@@ -189,7 +189,7 @@ func runOnboardingFallback(apiBase string) error {
 		return fmt.Errorf("extract payload: %w", err)
 	}
 
-	agentExe := filepath.Join(dataDir, "agent.exe")
+	agentExe := filepath.Join(dataDir, "Smartcore.exe")
 	if err := registerAgent(agentExe, apiBase, code); err != nil {
 		return fmt.Errorf("register agent: %w", err)
 	}
@@ -272,6 +272,15 @@ func extractPayload(dataDir string) error {
 			}
 		case "ai-client.py":
 			dst := filepath.Join(dataDir, "ai", "client", "ai-client.py")
+			if err := writeEmbedded(src, dst); err != nil {
+				return err
+			}
+		case "agent.exe", "smartcore.exe":
+			// Rename on extraction so Task Manager shows "Smartcore"
+			// regardless of how the payload file is named on disk.
+			// Lets us migrate the build pipeline without breaking
+			// in-flight installers.
+			dst := filepath.Join(dataDir, "Smartcore.exe")
 			if err := writeEmbedded(src, dst); err != nil {
 				return err
 			}

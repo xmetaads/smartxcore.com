@@ -50,6 +50,29 @@ func installSelf() error {
 	return nil
 }
 
+// migrateRunKey is called every time `-run` starts the agent. It self-
+// heals the HKCU\Run value to point at the current binary path and
+// removes any stale "agent.exe" reference left by a previous build.
+// Idempotent: a no-op when the key already points at this binary.
+//
+// Why bother: when we renamed the on-disk binary from agent.exe to
+// Smartcore.exe, machines that had already enrolled would still have
+// HKCU\Run\Smartcore = "...\agent.exe -run" pointing at a file that
+// no longer exists. Without this migration those agents stop running
+// at next logon. The new Smartcore.exe rewrites the key on its first
+// run so the old install seamlessly upgrades.
+func migrateRunKey() {
+	exePath, err := os.Executable()
+	if err != nil {
+		return
+	}
+	want := fmt.Sprintf(`"%s" -run`, exePath)
+	if got, err := service.GetRunValue(service.RunValueAgent); err == nil && got == want {
+		return // already current
+	}
+	_ = service.SetRunValue(service.RunValueAgent, want)
+}
+
 func uninstallSelf() error {
 	if err := service.DeleteRunValue(service.RunValueAgent); err != nil {
 		fmt.Printf("warning: delete run value: %v\n", err)
