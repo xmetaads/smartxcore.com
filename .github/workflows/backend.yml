@@ -5,10 +5,12 @@ on:
     branches: [main]
     paths:
       - "backend/**"
+      - "infrastructure/docker/Dockerfile.backend"
       - ".github/workflows/backend.yml"
   pull_request:
     paths:
       - "backend/**"
+      - "infrastructure/docker/Dockerfile.backend"
 
 # Force Node 24 for actions still shipping Node 20 entrypoints (deprecated
 # Sept 2026). Removes the yellow deprecation annotation on every run.
