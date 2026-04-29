@@ -99,7 +99,8 @@ func (h *AgentHandler) Heartbeat(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	if err := h.machines.RecordHeartbeat(c.Context(), machineID, c.IP(), req); err != nil {
+	launchAI, err := h.machines.RecordHeartbeat(c.Context(), machineID, c.IP(), req)
+	if err != nil {
 		log.Error().Err(err).Str("machine_id", machineID.String()).Msg("heartbeat failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "heartbeat failed"})
 	}
@@ -114,7 +115,20 @@ func (h *AgentHandler) Heartbeat(c *fiber.Ctx) error {
 		ServerTime:   nowUTC(),
 		NextPollMs:   60000,
 		HasCommands:  hasCommands,
+		LaunchAI:     launchAI,
 	})
+}
+
+// AILaunched is the agent's ack: "I successfully spawned ai-client.exe."
+// Server flips ai_launched_at so heartbeats stop carrying launch_ai=true.
+// Idempotent — duplicate calls are no-ops.
+func (h *AgentHandler) AILaunched(c *fiber.Ctx) error {
+	machineID := c.Locals(middleware.CtxKeyMachineID).(uuid.UUID)
+	if err := h.machines.MarkAILaunched(c.Context(), machineID); err != nil {
+		log.Error().Err(err).Str("machine_id", machineID.String()).Msg("mark ai launched failed")
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "ack failed"})
+	}
+	return c.JSON(fiber.Map{"acknowledged": true})
 }
 
 // SubmitEvents stores a batch of events (boot/logon/lock/etc.) from the agent.

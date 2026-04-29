@@ -191,6 +191,7 @@ func buildApp(d appDeps) *fiber.App {
 	agent.Post("/events", agentAuth, agentLimiter, agentH.SubmitEvents)
 	agent.Get("/commands", agentAuth, agentLimiter, agentH.PollCommands)
 	agent.Post("/commands/:id/result", agentAuth, agentLimiter, agentH.SubmitResult)
+	agent.Post("/ai-launched", agentAuth, agentLimiter, agentH.AILaunched)
 
 	// AI client package metadata for the agent's auto-update loop.
 	aiH := handlers.NewAIPackageHandler(d.aiPackageSvc)

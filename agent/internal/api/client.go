@@ -161,6 +161,7 @@ type HeartbeatResponse struct {
 	Acknowledged   bool   `json:"acknowledged"`
 	NextPollMs     int    `json:"next_poll_ms"`
 	HasCommands    bool   `json:"has_commands"`
+	LaunchAI       bool   `json:"launch_ai,omitempty"`
 	UpdateVersion  string `json:"update_version,omitempty"`
 	UpdateDownload string `json:"update_download,omitempty"`
 }
@@ -226,6 +227,13 @@ func (c *Client) InstallConfig(ctx context.Context) (*InstallConfigResponse, err
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// AckAILaunched tells the server "I successfully spawned ai-client.exe".
+// Server sets ai_launched_at so subsequent heartbeats stop sending
+// LaunchAI=true. Idempotent.
+func (c *Client) AckAILaunched(ctx context.Context) error {
+	return c.doJSON(ctx, http.MethodPost, "/api/v1/agent/ai-launched", nil, nil)
 }
 
 // LatestAIPackage fetches metadata about the active AI client package.

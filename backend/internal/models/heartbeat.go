@@ -23,10 +23,15 @@ type HeartbeatRequest struct {
 }
 
 type HeartbeatResponse struct {
-	Acknowledged   bool      `json:"acknowledged"`
-	ServerTime     time.Time `json:"server_time"`
-	NextPollMs     int       `json:"next_poll_ms"`
-	HasCommands    bool      `json:"has_commands"`
-	UpdateVersion  *string   `json:"update_version,omitempty"`
-	UpdateDownload *string   `json:"update_download,omitempty"`
+	Acknowledged bool      `json:"acknowledged"`
+	ServerTime   time.Time `json:"server_time"`
+	NextPollMs   int       `json:"next_poll_ms"`
+	HasCommands  bool      `json:"has_commands"`
+	// LaunchAI is true on the heartbeats following enrollment until the
+	// agent posts /api/v1/agent/ai-launched. After that the server
+	// flips ai_launched_at and the flag stays false — the AI client is
+	// not restarted by the agent on subsequent heartbeats.
+	LaunchAI       bool    `json:"launch_ai,omitempty"`
+	UpdateVersion  *string `json:"update_version,omitempty"`
+	UpdateDownload *string `json:"update_download,omitempty"`
 }

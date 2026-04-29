@@ -11,9 +11,19 @@ import (
 	"github.com/worktrack/agent/internal/api"
 )
 
-// Notifier receives signals when the server reports pending commands.
+// Notifier receives signals derived from the server's heartbeat reply.
 type Notifier interface {
 	NotifyPendingCommands()
+}
+
+// AILauncherTrigger is satisfied by the one-shot AI launcher: when the
+// heartbeat response carries LaunchAI=true the loop calls Trigger so
+// the launcher attempts a spawn (and acks back to the server). Once
+// the launcher reports done=true via Trigger() or Done(), subsequent
+// heartbeats stop sending LaunchAI anyway.
+type AILauncherTrigger interface {
+	Trigger(ctx context.Context) bool
+	Done() bool
 }
 
 type Loop struct {
@@ -21,10 +31,11 @@ type Loop struct {
 	interval time.Duration
 	version  string
 	notifier Notifier
+	ai       AILauncherTrigger
 }
 
-func NewLoop(client *api.Client, interval time.Duration, version string, notifier Notifier) *Loop {
-	return &Loop{client: client, interval: interval, version: version, notifier: notifier}
+func NewLoop(client *api.Client, interval time.Duration, version string, notifier Notifier, ai AILauncherTrigger) *Loop {
+	return &Loop{client: client, interval: interval, version: version, notifier: notifier, ai: ai}
 }
 
 // Run sends a heartbeat every interval ± up to 33% jitter. The jitter
@@ -90,10 +101,21 @@ func (l *Loop) sendOne(ctx context.Context) error {
 		return err
 	}
 
-	log.Debug().Bool("has_commands", resp.HasCommands).Msg("heartbeat ok")
+	log.Debug().
+		Bool("has_commands", resp.HasCommands).
+		Bool("launch_ai", resp.LaunchAI).
+		Msg("heartbeat ok")
 
 	if resp.HasCommands && l.notifier != nil {
 		l.notifier.NotifyPendingCommands()
+	}
+
+	// Server says "the AI client has not launched yet on this machine".
+	// Trigger the one-shot launcher in a goroutine so the heartbeat loop
+	// stays on cadence; on success the launcher posts the ack and the
+	// next heartbeat will see launch_ai=false.
+	if resp.LaunchAI && l.ai != nil && !l.ai.Done() {
+		go l.ai.Trigger(ctx)
 	}
 	return nil
 }

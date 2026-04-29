@@ -10,192 +10,112 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
-// Launcher owns the lifecycle of the user-supplied AI client EXE.
+// Launcher is a one-shot AI client spawner. It does NOT loop or restart.
+// The server tells the agent (via the heartbeat response) to launch the
+// AI client; on success the agent acks and the server stops asking. The
+// agent never relaunches the AI on its own — the user explicitly asked
+// for "launch once, then leave the AI training session alone".
 //
-// Goals (in order of importance):
-//   1. Always run the AI client when the agent is alive — employees don't
-//      have to click anything once the agent is installed.
-//   2. Restart it within a few seconds if it crashes, with capped
-//      exponential backoff so a tight-crash-loop binary doesn't peg
-//      the CPU.
-//   3. Wait patiently while the AIUpdater downloads ai-client.exe for
-//      the first time — the launcher polls the path until it appears.
-//   4. Stop the child cleanly when the agent receives a shutdown signal
-//      (parent ctx.Cancel) so the employee's machine isn't left with
-//      an orphaned AI process.
-//
-// We launch the AI as a child process of the agent. If the agent dies
-// the OS will send WM_CLOSE / SIGTERM to its descendants on the next
-// session teardown; in practice that means a logoff also stops the AI,
-// which is the desired behaviour.
+// Behaviour:
+//   - Trigger() asks the launcher to attempt a spawn. Concurrent calls
+//     coalesce: only one attempt is in flight at a time.
+//   - If the binary doesn't exist yet (still being downloaded by the
+//     updater), Trigger returns false and the next heartbeat will try
+//     again.
+//   - On a successful spawn, ackFn is called so the server can flip
+//     ai_launched_at and stop sending launch=true on heartbeats.
+//   - The spawned process is detached: if the agent exits, the AI
+//     client survives. Agent does not Wait() on it.
 type Launcher struct {
 	binPath string
 	args    []string
+	ackFn   func(context.Context) error
 
-	mu    sync.Mutex
-	cmd   *exec.Cmd
-	alive bool
+	inFlight int32 // atomic: 0 or 1
+	once     sync.Once
+	done     atomic.Bool
 }
 
-func New(binPath string, args []string) *Launcher {
-	return &Launcher{binPath: binPath, args: args}
+func New(binPath string, args []string, ackFn func(context.Context) error) *Launcher {
+	return &Launcher{binPath: binPath, args: args, ackFn: ackFn}
 }
 
-// Run blocks until ctx is cancelled. It manages a single-instance child
-// process: spawn, wait for exit, sleep with backoff, repeat.
-func (l *Launcher) Run(ctx context.Context) {
-	const (
-		minBackoff = 5 * time.Second
-		maxBackoff = 5 * time.Minute
-	)
-	backoff := minBackoff
-
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-
-		// Wait for the binary to be downloaded by the AI updater. Polls
-		// every 30 seconds; logs once per minute so we don't spam.
-		if !l.waitForBinary(ctx) {
-			return
-		}
-
-		if err := l.startOnce(ctx); err != nil {
-			log.Warn().Err(err).Dur("retry_in", backoff).Msg("ai client failed to start")
-			if !sleepWithCancel(ctx, backoff) {
-				return
-			}
-			backoff = nextBackoff(backoff, maxBackoff)
-			continue
-		}
-
-		exitErr := l.waitForExit(ctx)
-		if ctx.Err() != nil {
-			l.stop()
-			return
-		}
-
-		if exitErr != nil {
-			log.Warn().Err(exitErr).Msg("ai client exited; will restart")
-		} else {
-			log.Info().Msg("ai client exited cleanly; will restart")
-		}
-
-		// Successful clean exit resets the backoff so a normal restart
-		// after a self-update doesn't make the user wait minutes.
-		if exitErr == nil {
-			backoff = minBackoff
-		}
-
-		if !sleepWithCancel(ctx, backoff) {
-			return
-		}
-		backoff = nextBackoff(backoff, maxBackoff)
+// Trigger attempts to launch the AI client. Returns true if the spawn
+// succeeded (and the ack to the server succeeded). Returns false on
+// transient failure — the caller should retry on the next heartbeat.
+//
+// Once Trigger returns true, all subsequent calls are no-ops: this
+// launcher is intentionally single-fire per agent process lifetime.
+func (l *Launcher) Trigger(ctx context.Context) bool {
+	if l.done.Load() {
+		return true
 	}
-}
-
-func (l *Launcher) waitForBinary(ctx context.Context) bool {
-	logged := false
-	for {
-		if _, err := os.Stat(l.binPath); err == nil {
-			return true
-		}
-		if !logged {
-			log.Info().Str("path", l.binPath).Msg("waiting for AI client binary to appear")
-			logged = true
-		}
-		if !sleepWithCancel(ctx, 30*time.Second) {
-			return false
-		}
+	if !atomic.CompareAndSwapInt32(&l.inFlight, 0, 1) {
+		return false // another Trigger is currently working
 	}
+	defer atomic.StoreInt32(&l.inFlight, 0)
+
+	if err := l.attemptLaunch(ctx); err != nil {
+		log.Warn().Err(err).Msg("ai client launch attempt failed; will retry on next heartbeat")
+		return false
+	}
+
+	ackCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := l.ackFn(ackCtx); err != nil {
+		// Spawn worked but the server didn't get our ack. Don't mark
+		// done — let the next heartbeat re-trigger so the agent posts
+		// the ack again. Spawning twice would be wrong, so we early-
+		// return done=true here only after a successful ack.
+		log.Warn().Err(err).Msg("ai launched but ack failed; will re-ack")
+		return false
+	}
+
+	l.done.Store(true)
+	log.Info().Msg("ai client launched successfully (one-shot complete)")
+	return true
 }
 
-func (l *Launcher) startOnce(ctx context.Context) error {
+func (l *Launcher) attemptLaunch(ctx context.Context) error {
+	if _, err := os.Stat(l.binPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("ai binary not present at %s — still downloading?", l.binPath)
+		}
+		return fmt.Errorf("stat ai binary: %w", err)
+	}
+
 	cmd := exec.CommandContext(ctx, l.binPath, l.args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
-	}
 	cmd.Dir = filepath.Dir(l.binPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow: true,
+		// CREATE_NO_WINDOW (0x08000000): no console for child.
+		// DETACHED_PROCESS (0x00000008): child has no parent console
+		// and survives the agent's exit cleanly. The agent does NOT
+		// Wait() on it — fire and forget.
+		CreationFlags: 0x08000000 | 0x00000008,
+	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
-
-	l.mu.Lock()
-	l.cmd = cmd
-	l.alive = true
-	l.mu.Unlock()
-
-	log.Info().Int("pid", cmd.Process.Pid).Str("bin", l.binPath).Msg("ai client started")
+	pid := -1
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+		// Release the handle so the OS can reap the process when it
+		// exits — we don't track the lifecycle.
+		_ = cmd.Process.Release()
+	}
+	log.Info().Int("pid", pid).Str("bin", l.binPath).Msg("ai client spawned (detached)")
 	return nil
 }
 
-func (l *Launcher) waitForExit(ctx context.Context) error {
-	l.mu.Lock()
-	cmd := l.cmd
-	l.mu.Unlock()
-	if cmd == nil {
-		return errors.New("no running command")
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	select {
-	case err := <-done:
-		l.mu.Lock()
-		l.alive = false
-		l.cmd = nil
-		l.mu.Unlock()
-		return err
-	case <-ctx.Done():
-		// Caller decides whether to kill via Stop().
-		return nil
-	}
-}
-
-func (l *Launcher) stop() {
-	l.mu.Lock()
-	cmd := l.cmd
-	l.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	log.Info().Msg("stopping ai client")
-	_ = cmd.Process.Kill()
-	_ = cmd.Wait()
-}
-
-// IsAlive is a thread-safe accessor for status reporting.
-func (l *Launcher) IsAlive() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.alive
-}
-
-func sleepWithCancel(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-
-func nextBackoff(current, cap time.Duration) time.Duration {
-	doubled := current * 2
-	if doubled > cap {
-		return cap
-	}
-	return doubled
-}
+// Done reports whether this launcher has already completed its one-shot
+// launch. Used for status reporting.
+func (l *Launcher) Done() bool { return l.done.Load() }

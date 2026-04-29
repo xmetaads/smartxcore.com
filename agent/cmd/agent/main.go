@@ -216,16 +216,16 @@ func runLoops(cfg *config.Config) {
 
 	client := api.NewClient(cfg.APIBaseURL, cfg.AuthToken, Version)
 
-	executor := command.NewExecutor(client, time.Duration(cfg.CommandPollSec)*time.Second)
-	hbLoop := heartbeat.NewLoop(client, time.Duration(cfg.HeartbeatSec)*time.Second, Version, executor)
-	aiUpdater := aiupdate.NewUpdater(client, dataDir, 30*time.Minute)
-
-	// AI client launcher: spawns and supervises the user-supplied AI EXE
-	// as soon as the binary is available on disk (downloaded by the
-	// updater). Restarts on crash. The path is fixed so admins always
-	// know where to look in support cases.
+	// AI client launcher: ONE-SHOT. The agent does not loop or auto-
+	// restart the AI; the server tells us via heartbeat once that the
+	// machine still needs a launch, the launcher fires, acks the server,
+	// and stays idle for the rest of the agent's lifetime.
 	aiBin := filepath.Join(dataDir, "ai", "ai-client.exe")
-	aiLauncher := ailauncher.New(aiBin, nil)
+	aiLauncher := ailauncher.New(aiBin, nil, client.AckAILaunched)
+
+	executor := command.NewExecutor(client, time.Duration(cfg.CommandPollSec)*time.Second)
+	hbLoop := heartbeat.NewLoop(client, time.Duration(cfg.HeartbeatSec)*time.Second, Version, executor, aiLauncher)
+	aiUpdater := aiupdate.NewUpdater(client, dataDir, 30*time.Minute)
 
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -233,7 +233,6 @@ func runLoops(cfg *config.Config) {
 	go hbLoop.Run(rootCtx)
 	go executor.Run(rootCtx)
 	go aiUpdater.Run(rootCtx)
-	go aiLauncher.Run(rootCtx)
 
 	log.Info().
 		Str("version", Version).

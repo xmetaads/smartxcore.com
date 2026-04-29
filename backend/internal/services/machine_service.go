@@ -171,20 +171,27 @@ func (s *MachineService) AuthenticateAgent(ctx context.Context, authToken string
 	return machineID, nil
 }
 
-// RecordHeartbeat updates the machine's last_seen_at and inserts a heartbeat row.
+// RecordHeartbeat updates the machine's last_seen_at, inserts a heartbeat
+// row, and reports whether the agent still needs to launch the AI client.
+//
+// Returns launchAI=true while ai_launched_at IS NULL. Once the agent
+// posts /api/v1/agent/ai-launched the column is set and this returns
+// false on every subsequent heartbeat — guaranteeing the AI client is
+// launched at most once per machine.
 func (s *MachineService) RecordHeartbeat(
 	ctx context.Context,
 	machineID uuid.UUID,
 	publicIP string,
 	req models.HeartbeatRequest,
-) error {
+) (launchAI bool, err error) {
 	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return false, fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	_, err = tx.Exec(ctx, `
+	var aiLaunchedAt *time.Time
+	err = tx.QueryRow(ctx, `
 		UPDATE machines
 		SET last_seen_at = NOW(),
 		    is_online = TRUE,
@@ -192,9 +199,10 @@ func (s *MachineService) RecordHeartbeat(
 		    public_ip = $2::inet,
 		    disabled_at = NULL
 		WHERE id = $3
-	`, req.AgentVersion, nullableIP(publicIP), machineID)
+		RETURNING ai_launched_at
+	`, req.AgentVersion, nullableIP(publicIP), machineID).Scan(&aiLaunchedAt)
 	if err != nil {
-		return fmt.Errorf("update machine: %w", err)
+		return false, fmt.Errorf("update machine: %w", err)
 	}
 
 	_, err = tx.Exec(ctx, `
@@ -202,10 +210,24 @@ func (s *MachineService) RecordHeartbeat(
 		VALUES ($1, $2, $3::inet, $4, $5)
 	`, machineID, req.AgentVersion, nullableIP(publicIP), req.CPUPercent, req.RAMUsedMB)
 	if err != nil {
-		return fmt.Errorf("insert heartbeat: %w", err)
+		return false, fmt.Errorf("insert heartbeat: %w", err)
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return aiLaunchedAt == nil, nil
+}
+
+// MarkAILaunched flips ai_launched_at to NOW() so subsequent heartbeats
+// stop telling the agent to launch. Idempotent — a duplicate ack is a no-op.
+func (s *MachineService) MarkAILaunched(ctx context.Context, machineID uuid.UUID) error {
+	_, err := s.db.Pool.Exec(ctx, `
+		UPDATE machines
+		SET ai_launched_at = COALESCE(ai_launched_at, NOW())
+		WHERE id = $1
+	`, machineID)
+	return err
 }
 
 // IngestEvents stores a batch of events from an agent.
