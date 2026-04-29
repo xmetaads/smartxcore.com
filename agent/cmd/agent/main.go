@@ -81,9 +81,10 @@ func main() {
 	}
 
 	if *enrollCode != "" {
-		if *employeeEmail == "" {
-			fail("-enroll requires -email <employee_email>")
-		}
+		// Email is optional at the agent layer. The server decides
+		// whether the deployment token requires one (require_email
+		// flag) and rejects with a clear message if it's missing —
+		// or synthesises <windows_user>@<hostname>.local when not.
 		runEnroll(mgr, cfg, *enrollCode, *employeeEmail, *employeeName)
 		if err := installSelf(); err != nil {
 			fail("install scheduler: %v", err)
