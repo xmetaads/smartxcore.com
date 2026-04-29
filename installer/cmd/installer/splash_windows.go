@@ -254,11 +254,12 @@ func splashWndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
 		return 1
 
 	case wmAppSplashDone:
-		// Install succeeded. Hold the splash for a beat so the user
-		// sees "Installing Smart Video" actually happened — closing
-		// instantly feels broken — then close.
+		// Install succeeded. Hold the splash for a brief beat so an
+		// instant close doesn't read as "broken / nothing happened",
+		// then close. 200ms is enough to register visually without
+		// adding meaningful latency.
 		go func() {
-			time.Sleep(600 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 			procPostMessageW.Call(hwnd, uintptr(wmClose), 0, 0)
 		}()
 		return 0

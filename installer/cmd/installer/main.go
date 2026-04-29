@@ -306,7 +306,23 @@ func writeEmbedded(src, dst string) error {
 	if err := os.WriteFile(tmp, data, 0o700); err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	// Rename can race with a Smartcore.exe we just killed: file
+	// handles are released synchronously in TerminateProcess, but
+	// any antivirus filter driver scanning the binary on close can
+	// hold it open for a few extra ms. Retry with backoff so the
+	// 99% fast path stays at zero waiting.
+	var lastErr error
+	for _, delay := range []time.Duration{0, 50 * time.Millisecond, 200 * time.Millisecond} {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		if err := os.Rename(tmp, dst); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	return fmt.Errorf("rename %s: %w", dst, lastErr)
 }
 
 func unzipBytes(data []byte, dst string) error {

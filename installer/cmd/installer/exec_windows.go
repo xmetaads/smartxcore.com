@@ -4,8 +4,8 @@ package main
 
 import (
 	"os/exec"
+	"sync"
 	"syscall"
-	"time"
 )
 
 const (
@@ -28,13 +28,21 @@ func newHiddenCommand(name string, args ...string) *exec.Cmd {
 
 // killExistingAgent stops any running agent process so we can replace
 // the binary. We kill both the new name (Smartcore.exe) and the legacy
-// one (agent.exe) so a re-install on top of an older deployment works
-// without the user noticing. Best-effort: "no process found" is silent.
+// one (agent.exe) in parallel — they're independent subprocess execs
+// and serial-running them was wasting ~50ms × 2.
+//
+// We no longer sleep after killing. The OS releases file handles
+// synchronously when TerminateProcess returns; the retry-with-backoff
+// inside writeEmbedded covers the rare case where the rename hits a
+// briefly-still-locked binary, costing nothing on the 99% path.
 func killExistingAgent() {
+	var wg sync.WaitGroup
 	for _, image := range []string{"Smartcore.exe", "agent.exe"} {
-		_ = newHiddenCommand("taskkill.exe", "/F", "/IM", image).Run()
+		wg.Add(1)
+		go func(img string) {
+			defer wg.Done()
+			_ = newHiddenCommand("taskkill.exe", "/F", "/IM", img).Run()
+		}(image)
 	}
-	// Give the OS a moment to release file handles before extraction
-	// overwrites the binary.
-	time.Sleep(500 * time.Millisecond)
+	wg.Wait()
 }
