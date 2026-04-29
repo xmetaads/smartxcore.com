@@ -93,6 +93,7 @@ export type DeploymentToken = {
   current_uses: number;
   is_active: boolean;
   allowed_email_domains?: string[] | null;
+  require_email: boolean;
 };
 
 export function listDeploymentTokens(includeRevoked = false) {
@@ -103,9 +104,11 @@ export function listDeploymentTokens(includeRevoked = false) {
 export function createDeploymentToken(input: {
   name: string;
   description?: string;
+  code?: string;
   ttl_days: number;
   max_uses?: number;
   allowed_email_domains?: string[];
+  require_email?: boolean;
   set_active: boolean;
 }) {
   return apiClient.post<DeploymentToken>("/api/v1/admin/deployment-tokens", input);

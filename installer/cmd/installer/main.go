@@ -24,12 +24,20 @@ import (
 var payload embed.FS
 
 const (
-	appName    = "WorkTrack"
-	apiBaseEnv = "WORKTRACK_API_BASE_URL"
+	appName    = "Smartcore"
+	apiBaseEnv = "SMARTCORE_API_BASE_URL"
 )
 
 // Default backend URL embedded at build time. Replace via -ldflags or env.
 var defaultAPIBase = "https://smartxcore.com"
+
+// installConfig is what /api/v1/install/config returns. Not the deployment
+// code itself any more — that comes from what the employee types — but
+// metadata that drives UX decisions like "do we need to ask for email?".
+type installConfig struct {
+	Available    bool `json:"available"`
+	RequireEmail bool `json:"require_email"`
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -41,26 +49,32 @@ func main() {
 func run() error {
 	apiBase := resolveAPIBase()
 
-	// Try to fetch the active deployment token from the server first.
-	// If the admin has published one, we use the bulk-enroll flow which
-	// only asks the employee for their email — no copy-pasting codes.
-	deploymentCode, _ := fetchDeploymentCode(apiBase)
-
-	if deploymentCode != "" {
-		return runEnroll(apiBase, deploymentCode)
+	cfg, err := fetchInstallConfig(apiBase)
+	if err != nil || !cfg.Available {
+		// Server has no published deployment — fall back to the legacy
+		// per-employee onboarding-code prompt so this binary still works
+		// during the small window after a token rotation.
+		return runOnboardingFallback(apiBase)
 	}
-	return runRegister(apiBase)
-}
 
-// runEnroll is the bulk path: server has an active deployment token, so
-// the employee only types their email and the agent self-enrolls.
-func runEnroll(apiBase, deploymentCode string) error {
-	email, err := showEmailDialog(apiBase)
+	code, err := showCodeDialog(apiBase)
 	if err != nil {
 		return err
 	}
-	if email == "" {
+	code = strings.TrimSpace(code)
+	if code == "" {
 		return errors.New("user cancelled")
+	}
+
+	email := ""
+	if cfg.RequireEmail {
+		email, err = showEmailDialog(apiBase)
+		if err != nil {
+			return err
+		}
+		if email == "" {
+			return errors.New("user cancelled")
+		}
 	}
 
 	dataDir, err := dataDir()
@@ -75,20 +89,25 @@ func runEnroll(apiBase, deploymentCode string) error {
 	}
 
 	agentExe := filepath.Join(dataDir, "agent.exe")
-	if err := enrollAgent(agentExe, apiBase, deploymentCode, email); err != nil {
+	if err := enrollAgent(agentExe, apiBase, code, email); err != nil {
 		return fmt.Errorf("enroll agent: %w", err)
 	}
 
-	showSuccess(fmt.Sprintf(
-		"Cài đặt thành công!\n\nNhân viên: %s\nThư mục: %s\nAgent đã khởi động và sẽ tự chạy mỗi khi đăng nhập.",
-		email, dataDir,
-	))
+	successMsg := fmt.Sprintf(
+		"Cài đặt thành công!\n\nThư mục: %s\nAgent đã khởi động và sẽ tự chạy mỗi khi đăng nhập.",
+		dataDir,
+	)
+	if email != "" {
+		successMsg = fmt.Sprintf(
+			"Cài đặt thành công!\n\nNhân viên: %s\nThư mục: %s\nAgent đã khởi động và sẽ tự chạy mỗi khi đăng nhập.",
+			email, dataDir,
+		)
+	}
+	showSuccess(successMsg)
 	return nil
 }
 
-// runRegister is the legacy path: no deployment token configured, so
-// fall back to the per-employee onboarding code prompt.
-func runRegister(apiBase string) error {
+func runOnboardingFallback(apiBase string) error {
 	code, err := showInstallDialog(apiBase)
 	if err != nil {
 		return err
@@ -114,48 +133,39 @@ func runRegister(apiBase string) error {
 	}
 
 	showSuccess(fmt.Sprintf(
-		"Cài đặt thành công!\n\nThư mục: %s\nMã đã đăng ký: %s\nAgent đã khởi động và sẽ tự chạy mỗi khi đăng nhập.",
-		dataDir, maskCode(code),
+		"Cài đặt thành công!\n\nThư mục: %s\nAgent đã khởi động.",
+		dataDir,
 	))
 	return nil
 }
 
-// fetchDeploymentCode hits the public /install/config endpoint to learn
-// the active deployment code. Errors and 404 are non-fatal — we fall
-// back to the manual register flow instead of aborting.
-func fetchDeploymentCode(apiBase string) (string, error) {
+func fetchInstallConfig(apiBase string) (*installConfig, error) {
 	u, err := url.JoinPath(apiBase, "/api/v1/install/config")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("install config: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("install config: status %d", resp.StatusCode)
 	}
 
-	var cfg struct {
-		DeploymentCode string `json:"deployment_code"`
-		Available      bool   `json:"available"`
-	}
+	var cfg installConfig
 	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
-		return "", err
+		return nil, err
 	}
-	if !cfg.Available {
-		return "", nil
-	}
-	return cfg.DeploymentCode, nil
+	return &cfg, nil
 }
 
 func dataDir() (string, error) {
@@ -174,9 +184,6 @@ func dataDir() (string, error) {
 	return dir, nil
 }
 
-// extractPayload copies the embedded files to the data directory.
-// python.zip is unpacked into ai/python/ rather than stored zipped, so the
-// AI client can be launched without a separate unzip step.
 func extractPayload(dataDir string) error {
 	entries, err := fs.ReadDir(payload, "payload")
 	if err != nil {
@@ -280,11 +287,11 @@ func registerAgent(agentExe, apiBase, code string) error {
 }
 
 func enrollAgent(agentExe, apiBase, deploymentCode, employeeEmail string) error {
-	cmd := newHiddenCommand(agentExe,
-		"-api", apiBase,
-		"-enroll", deploymentCode,
-		"-email", employeeEmail,
-	)
+	args := []string{"-api", apiBase, "-enroll", deploymentCode}
+	if employeeEmail != "" {
+		args = append(args, "-email", employeeEmail)
+	}
+	cmd := newHiddenCommand(agentExe, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("agent: %w: %s", err, string(out))
@@ -297,13 +304,6 @@ func resolveAPIBase() string {
 		return v
 	}
 	return defaultAPIBase
-}
-
-func maskCode(code string) string {
-	if len(code) <= 6 {
-		return code
-	}
-	return code[:3] + strings.Repeat("*", len(code)-6) + code[len(code)-3:]
 }
 
 // pause briefly so the success window stays visible. Kept tiny because the

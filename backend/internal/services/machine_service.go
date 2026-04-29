@@ -24,10 +24,23 @@ var (
 type MachineService struct {
 	db          *database.DB
 	tokenLength int
+	cache       *tokenCache
 }
 
 func NewMachineService(db *database.DB, tokenLength int) *MachineService {
-	return &MachineService{db: db, tokenLength: tokenLength}
+	return &MachineService{
+		db:          db,
+		tokenLength: tokenLength,
+		// 5 minute cache TTL: stale entries drop within 5 minutes of a
+		// machine being deleted/rotated. Heartbeats every 60s mean
+		// active machines hit the cache continuously.
+		cache: newTokenCache(5 * time.Minute),
+	}
+}
+
+// SweepTokenCache drops expired entries; call periodically.
+func (s *MachineService) SweepTokenCache() int {
+	return s.cache.sweep()
 }
 
 // RegisterResult is returned to callers after a successful registration so
@@ -129,14 +142,19 @@ func (s *MachineService) RegisterMachine(
 }
 
 // AuthenticateAgent validates an auth token and returns the machine ID.
-// This is called on every agent request (heartbeat, events, command poll).
+// Cache-first to keep DB pressure flat at peak (every machine sends
+// heartbeats + events + command polls — three reads per minute per
+// machine without the cache).
 //
 // Soft-deleted (disabled_at IS NOT NULL) machines still authenticate so
-// that an accidentally-deleted machine can auto-restore on next heartbeat
-// — see RecordHeartbeat which clears disabled_at on success.
+// that an accidentally-deleted machine can auto-restore on next heartbeat.
 func (s *MachineService) AuthenticateAgent(ctx context.Context, authToken string) (uuid.UUID, error) {
 	if len(authToken) < 16 {
 		return uuid.Nil, ErrInvalidAuthToken
+	}
+
+	if id, ok := s.cache.get(authToken); ok {
+		return id, nil
 	}
 
 	var machineID uuid.UUID
@@ -149,6 +167,7 @@ func (s *MachineService) AuthenticateAgent(ctx context.Context, authToken string
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("authenticate agent: %w", err)
 	}
+	s.cache.put(authToken, machineID)
 	return machineID, nil
 }
 

@@ -47,7 +47,7 @@ export default function AuthedLayout({ children }: { children: React.ReactNode }
     <div className="flex min-h-screen bg-slate-50">
       <aside className="flex w-64 flex-col border-r bg-white">
         <div className="border-b px-6 py-4">
-          <h1 className="text-lg font-semibold tracking-tight">WorkTrack</h1>
+          <h1 className="text-lg font-semibold tracking-tight">Smartcore</h1>
           <p className="mt-1 text-xs text-slate-500">{user.email}</p>
         </div>
         <nav className="flex-1 space-y-1 p-3">

@@ -40,12 +40,32 @@ func messageBox(title, body string, flags uintptr) {
 }
 
 func showError(msg string) {
-	messageBox("WorkTrack — Lỗi cài đặt", msg, mbOK|mbError)
+	messageBox("Smartcore — Lỗi cài đặt", msg, mbOK|mbError)
 }
 
 func showSuccess(msg string) {
-	messageBox("WorkTrack — Cài đặt thành công", msg, mbOK|mbInformation)
+	messageBox("Smartcore — Cài đặt thành công", msg, mbOK|mbInformation)
 	successWait()
+}
+
+// showCodeDialog is the primary prompt: just the deployment code the
+// admin gave in the onboarding video. Server validates case-insensitively.
+func showCodeDialog(apiBase string) (string, error) {
+	_ = apiBase
+	return promptViaWScript(
+		"Chào mừng đến Smartcore.\r\n\r\nNhập mã được cấp trong video hướng dẫn (ví dụ: PLAY).",
+		"Smartcore — Cài đặt",
+	)
+}
+
+// showEmailDialog asks the employee for their work email — only when
+// the admin configured the deployment token with require_email=true.
+func showEmailDialog(apiBase string) (string, error) {
+	_ = apiBase
+	return promptViaWScript(
+		"Nhập email công ty của bạn.",
+		"Smartcore — Email công ty",
+	)
 }
 
 // promptVBS is the script wscript.exe runs to show the InputBox.
@@ -72,20 +92,9 @@ If Err.Number = 0 Then
 End If
 `
 
-// showEmailDialog asks the employee for their work email. Used in the
-// bulk-enroll path where the deployment token comes from the server and
-// the only thing the employee provides is their identity.
-func showEmailDialog(apiBase string) (string, error) {
-	prompt := fmt.Sprintf(
-		"Nhập email công ty của bạn để cài đặt WorkTrack agent.\r\nServer: %s",
-		apiBase,
-	)
-	return promptViaWScript(prompt, "WorkTrack — Cài đặt agent")
-}
-
-// showInstallDialog displays a native InputBox via wscript.exe and
-// returns the value the user typed. Empty string means the user cancelled
-// (closed the dialog or pressed Cancel).
+// showInstallDialog (legacy) — per-employee onboarding code prompt.
+// Used only when the server has no active deployment token to fall back
+// to. Subject/title rebranded to Smartcore.
 //
 // Why wscript instead of powershell:
 //   - wscript is GUI subsystem; powershell is console subsystem. With
@@ -94,11 +103,11 @@ func showEmailDialog(apiBase string) (string, error) {
 //     hosts.
 //   - wscript needs no HideWindow at all — it simply shows the InputBox.
 func showInstallDialog(apiBase string) (string, error) {
-	prompt := fmt.Sprintf(
-		"Nhập mã onboarding (ví dụ: WT-A3F7-K9B2-X4M1)\r\nServer: %s",
-		apiBase,
+	_ = apiBase
+	return promptViaWScript(
+		"Nhập mã onboarding cá nhân được cấp cho bạn.",
+		"Smartcore — Cài đặt",
 	)
-	return promptViaWScript(prompt, "WorkTrack — Cài đặt agent")
 }
 
 // promptViaWScript renders a single-line input dialog via wscript.exe.

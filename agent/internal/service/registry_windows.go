@@ -20,8 +20,8 @@ const (
 	regOptionNonVol  = 0
 	regSzType        = 1
 	runKeyPath       = `Software\Microsoft\Windows\CurrentVersion\Run`
-	RunValueAgent    = "WorkTrackAgent"
-	RunValueWatchdog = "WorkTrackWatchdog"
+	RunValueAgent    = "Smartcore"
+	RunValueWatchdog = "SmartcoreWatchdog" // legacy — kept for clean uninstall
 )
 
 var (

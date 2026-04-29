@@ -5,7 +5,7 @@ export default function HomePage() {
     <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-slate-50 to-slate-100 px-6">
       <div className="w-full max-w-md space-y-8 rounded-lg border bg-white p-8 shadow-sm">
         <div className="space-y-2">
-          <h1 className="text-2xl font-semibold tracking-tight">WorkTrack</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Smartcore</h1>
           <p className="text-sm text-slate-500">
             Hệ thống giám sát endpoint nội bộ
           </p>

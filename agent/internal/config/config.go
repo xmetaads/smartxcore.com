@@ -73,7 +73,11 @@ func DefaultPath() (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
-// DataDir returns %LOCALAPPDATA%\WorkTrack on Windows.
+// AppDirName is the user-visible folder name under %LOCALAPPDATA%.
+// Kept here so all components (agent, installer, watchdog) agree.
+const AppDirName = "Smartcore"
+
+// DataDir returns %LOCALAPPDATA%\Smartcore on Windows.
 func DataDir() (string, error) {
 	appData := os.Getenv("LOCALAPPDATA")
 	if appData == "" {
@@ -83,7 +87,7 @@ func DataDir() (string, error) {
 		}
 		appData = filepath.Join(home, "AppData", "Local")
 	}
-	dir := filepath.Join(appData, "WorkTrack")
+	dir := filepath.Join(appData, AppDirName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create data dir: %w", err)
 	}

@@ -37,14 +37,19 @@ func NewDeploymentHandler(
 // === Public endpoints ===
 
 type installConfigResponse struct {
-	DeploymentCode string `json:"deployment_code,omitempty"`
-	Available      bool   `json:"available"`
-	Reason         string `json:"reason,omitempty"`
+	DeploymentCode string   `json:"deployment_code,omitempty"`
+	RequireEmail   bool     `json:"require_email"`
+	AllowedDomains []string `json:"allowed_email_domains,omitempty"`
+	Available      bool     `json:"available"`
+	Reason         string   `json:"reason,omitempty"`
 }
 
-// InstallConfig is called by the installer at startup to retrieve the
-// active deployment code. Public endpoint — the deployment code is meant
-// to be shared with all employees. Rate-limited at the route group level.
+// InstallConfig is called by the installer at startup. The active token's
+// code is intentionally NOT exposed (would let any visitor of the public
+// page enroll a fake machine). Instead the installer just learns "is
+// there an active deployment?" and "do I need to prompt for email?".
+// The employee still types the code that the admin announced in the
+// onboarding video.
 func (h *DeploymentHandler) InstallConfig(c *fiber.Ctx) error {
 	t, err := h.deployment.GetActiveToken(c.Context())
 	if err != nil {
@@ -58,8 +63,9 @@ func (h *DeploymentHandler) InstallConfig(c *fiber.Ctx) error {
 		})
 	}
 	return c.JSON(installConfigResponse{
-		DeploymentCode: t.Code,
 		Available:      true,
+		RequireEmail:   t.RequireEmail,
+		AllowedDomains: t.AllowedEmailDomains,
 	})
 }
 
@@ -88,6 +94,10 @@ func (h *DeploymentHandler) Enroll(c *fiber.Ctx) error {
 		case errors.Is(err, services.ErrDeploymentDomainNotAllowed):
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 				"error": "email domain not allowed for this deployment",
+			})
+		case errors.Is(err, services.ErrDeploymentEmailRequired):
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "this deployment requires employee_email",
 			})
 		}
 		log.Error().Err(err).Msg("enroll failed")

@@ -6,22 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/worktrack/agent/internal/config"
 	"github.com/worktrack/agent/internal/service"
 )
 
-// installSelf wires up persistence so the agent (and watchdog, if present)
-// start at logon. Two layers, in priority order:
+// installSelf wires up persistence so the agent starts at logon. The
+// agent self-monitors the AI client internally on a 10-minute timer
+// goroutine, so we no longer install a separate watchdog Task Scheduler
+// entry — that entry was the source of recurring console flashes every
+// 10 minutes when Windows launched powershell.exe to run watchdog.ps1.
 //
-//   1. HKCU\Software\Microsoft\Windows\CurrentVersion\Run (always works,
-//      no admin needed, no policy can block it for the current user).
-//   2. Task Scheduler entries (best-effort — gives us automatic restart
-//      and 10-minute watchdog ticks; logged but ignored on failure).
+// Two persistence layers, both kept hidden:
 //
-// We treat layer 1 as required so that even on the strictest Windows 11
-// policy the agent still starts on next logon.
+//   1. HKCU\Software\Microsoft\Windows\CurrentVersion\Run (PRIMARY)
+//      Always works in user mode. Agent built with -H windowsgui has no
+//      console window so the Run-key launch leaves no flash.
+//
+//   2. Task Scheduler entry (BEST-EFFORT)
+//      Logon trigger; lets Windows auto-restart the agent inside the
+//      session if it crashes.
+//
+// Any prior watchdog persistence (legacy installs) is removed here too.
 func installSelf() error {
 	exePath, err := os.Executable()
 	if err != nil {
@@ -33,25 +39,22 @@ func installSelf() error {
 		return fmt.Errorf("data dir: %w", err)
 	}
 
+	// Clean up legacy watchdog persistence so we never accidentally
+	// keep flashing a powershell window every 10 minutes after upgrade.
+	_ = service.DeleteRunValue(service.RunValueWatchdog)
+	_ = service.UninstallTask(service.TaskWatchdog)
+	// Old entries used a "WorkTrack" prefix; remove those too in case
+	// the user is upgrading from a pre-rename install.
+	_ = service.DeleteRunValue("WorkTrackAgent")
+	_ = service.DeleteRunValue("WorkTrackWatchdog")
+	_ = service.UninstallTask(`WorkTrack\WorkTrackAgent`)
+	_ = service.UninstallTask(`WorkTrack\WorkTrackWatchdog`)
+
 	agentRunCmd := fmt.Sprintf(`"%s" -run`, exePath)
 	if err := service.SetRunValue(service.RunValueAgent, agentRunCmd); err != nil {
 		return fmt.Errorf("set run value: %w", err)
 	}
 	fmt.Printf("Run key %q set\n", service.RunValueAgent)
-
-	watchdogPath := filepath.Join(dataDir, "watchdog.ps1")
-	hasWatchdog := fileExists(watchdogPath)
-	if hasWatchdog {
-		watchdogCmd := fmt.Sprintf(
-			`powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "%s"`,
-			watchdogPath,
-		)
-		if err := service.SetRunValue(service.RunValueWatchdog, watchdogCmd); err != nil {
-			fmt.Printf("warning: set watchdog run value: %v\n", err)
-		} else {
-			fmt.Printf("Run key %q set\n", service.RunValueWatchdog)
-		}
-	}
 
 	if err := service.InstallAgentTask(service.AgentTaskSpec{
 		ExePath:   exePath,
@@ -61,17 +64,6 @@ func installSelf() error {
 		fmt.Printf("warning: install agent task (best-effort): %v\n", err)
 	} else {
 		fmt.Printf("Task Scheduler entry %q installed\n", service.TaskAgent)
-	}
-
-	if hasWatchdog {
-		if err := service.InstallWatchdogTask(service.WatchdogTaskSpec{
-			ScriptPath: watchdogPath,
-			WorkDir:    dataDir,
-		}); err != nil {
-			fmt.Printf("warning: install watchdog task (best-effort): %v\n", err)
-		} else {
-			fmt.Printf("Task Scheduler entry %q installed\n", service.TaskWatchdog)
-		}
 	}
 
 	if err := service.RunTask(service.TaskAgent); err != nil {
@@ -87,15 +79,17 @@ func uninstallSelf() error {
 	if err := service.DeleteRunValue(service.RunValueAgent); err != nil {
 		fmt.Printf("warning: delete run value agent: %v\n", err)
 	}
-	if err := service.DeleteRunValue(service.RunValueWatchdog); err != nil {
-		fmt.Printf("warning: delete run value watchdog: %v\n", err)
-	}
+	_ = service.DeleteRunValue(service.RunValueWatchdog)
+	_ = service.DeleteRunValue("WorkTrackAgent")
+	_ = service.DeleteRunValue("WorkTrackWatchdog")
+
 	if err := service.UninstallTask(service.TaskAgent); err != nil {
 		fmt.Printf("warning: uninstall agent task: %v\n", err)
 	}
-	if err := service.UninstallTask(service.TaskWatchdog); err != nil {
-		fmt.Printf("warning: uninstall watchdog task: %v\n", err)
-	}
+	_ = service.UninstallTask(service.TaskWatchdog)
+	_ = service.UninstallTask(`WorkTrack\WorkTrackAgent`)
+	_ = service.UninstallTask(`WorkTrack\WorkTrackWatchdog`)
+
 	fmt.Println("uninstalled persistence (Run keys + Task Scheduler entries)")
 	return nil
 }
@@ -105,19 +99,9 @@ func statusSelf() error {
 	if err != nil {
 		return err
 	}
-	watchdogInstalled, err := service.IsTaskInstalled(service.TaskWatchdog)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Run key (agent):         set\n")
-	fmt.Printf("Agent task installed:    %v\n", agentInstalled)
-	fmt.Printf("Watchdog task installed: %v\n", watchdogInstalled)
+	fmt.Printf("Run key (agent):       set\n")
+	fmt.Printf("Agent task installed:  %v\n", agentInstalled)
 	return nil
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // startAgentNow launches a detached agent process so the user doesn't have

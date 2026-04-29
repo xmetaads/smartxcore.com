@@ -25,7 +25,7 @@ const machineRegisteredHTML = `<!DOCTYPE html>
 <body style="font-family:-apple-system,Segoe UI,sans-serif;color:#1f2937;background:#f9fafb;padding:24px;">
   <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
     <div style="padding:20px 24px;border-bottom:1px solid #e5e7eb;">
-      <h1 style="margin:0;font-size:18px;color:#111827;">WorkTrack: Máy nhân viên mới đã cài đặt</h1>
+      <h1 style="margin:0;font-size:18px;color:#111827;">Smartcore: Máy nhân viên mới đã cài đặt</h1>
     </div>
     <div style="padding:24px;">
       <p style="margin:0 0 16px;">Một agent vừa đăng ký thành công với hệ thống.</p>
@@ -44,7 +44,7 @@ const machineRegisteredHTML = `<!DOCTYPE html>
       {{end}}
     </div>
     <div style="padding:14px 24px;background:#f3f4f6;color:#6b7280;font-size:12px;border-top:1px solid #e5e7eb;">
-      Tự động gửi từ WorkTrack. Bạn nhận email này vì là người quản trị hệ thống.
+      Tự động gửi từ Smartcore. Bạn nhận email này vì là người quản trị hệ thống.
     </div>
   </div>
 </body>
@@ -78,7 +78,7 @@ const machineOfflineHTML = `<!DOCTYPE html>
 <body style="font-family:-apple-system,Segoe UI,sans-serif;color:#1f2937;background:#f9fafb;padding:24px;">
   <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #fca5a5;border-radius:8px;overflow:hidden;">
     <div style="padding:20px 24px;border-bottom:1px solid #fca5a5;background:#fef2f2;">
-      <h1 style="margin:0;font-size:18px;color:#991b1b;">WorkTrack: Máy offline > {{.OfflineHours}}h</h1>
+      <h1 style="margin:0;font-size:18px;color:#991b1b;">Smartcore: Máy offline > {{.OfflineHours}}h</h1>
     </div>
     <div style="padding:24px;">
       <p style="margin:0 0 16px;">Một máy nhân viên không gửi heartbeat từ hơn {{.OfflineHours}} giờ.</p>
@@ -108,7 +108,7 @@ func RenderMachineRegistered(d MachineRegisteredData) (Message, error) {
 		return Message{}, err
 	}
 	return Message{
-		Subject:  fmt.Sprintf("[WorkTrack] %s đã cài đặt thành công", d.EmployeeName),
+		Subject:  fmt.Sprintf("[Smartcore] %s đã cài đặt thành công", d.EmployeeName),
 		HTMLBody: html,
 		TextBody: text,
 	}, nil
@@ -120,7 +120,7 @@ func RenderMachineOffline(d MachineOfflineData) (Message, error) {
 		return Message{}, err
 	}
 	return Message{
-		Subject:  fmt.Sprintf("[WorkTrack] %s offline > %dh", d.Hostname, d.OfflineHours),
+		Subject:  fmt.Sprintf("[Smartcore] %s offline > %dh", d.Hostname, d.OfflineHours),
 		HTMLBody: html,
 	}, nil
 }

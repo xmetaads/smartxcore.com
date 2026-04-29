@@ -6,7 +6,7 @@ import { QueryProvider } from "@/components/QueryProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "WorkTrack",
+  title: "Smartcore",
   description: "Internal endpoint monitoring and management",
   robots: { index: false, follow: false },
 };

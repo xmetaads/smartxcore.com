@@ -51,11 +51,11 @@ export default function InstallPage() {
       <div className="mx-auto w-full max-w-2xl space-y-6">
         <header className="text-center">
           <h1 className="text-3xl font-bold tracking-tight text-slate-900">
-            Cài đặt Workspace App
+            Cài đặt Smartcore
           </h1>
           <p className="mt-2 text-sm text-slate-600">
             {bulkMode
-              ? "Hướng dẫn 4 bước — chỉ cần email công ty."
+              ? "Hướng dẫn 3 bước — chỉ cần mã được cấp trong video đào tạo."
               : "Hướng dẫn cài đặt cho nhân viên mới."}
           </p>
         </header>
@@ -110,13 +110,13 @@ export default function InstallPage() {
             </Step>
 
             {bulkMode ? (
-              <Step number={3} title="Nhập email công ty">
+              <Step number={3} title="Nhập mã được cấp trong video">
                 <p className="mt-1 text-sm text-slate-600">
-                  Hộp thoại sẽ hỏi <strong>&quot;Nhập email công ty&quot;</strong>. Nhập email
-                  bạn dùng tại công ty (vd: <code>tencuaban@smartxcore.com</code>).
+                  Hộp thoại Smartcore sẽ hiện ra. Nhập mã được cấp trong video hướng dẫn đào tạo
+                  AI (ví dụ: <code className="font-mono">PLAY</code>).
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Không cần mã code nào — installer tự xác thực với hệ thống.
+                  Không phân biệt hoa thường. Không cần email, agent dùng tên máy + Windows user.
                 </p>
               </Step>
             ) : (

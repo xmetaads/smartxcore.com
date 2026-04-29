@@ -12,11 +12,11 @@ import (
 )
 
 // Task names used in Windows Task Scheduler. We use a custom folder
-// (WorkTrack\) so admins can find our entries quickly without polluting
+// (Smartcore\) so admins can find our entries quickly without polluting
 // the root namespace.
 const (
-	TaskAgent    = `WorkTrack\WorkTrackAgent`
-	TaskWatchdog = `WorkTrack\WorkTrackWatchdog`
+	TaskAgent    = `Smartcore\SmartcoreAgent`
+	TaskWatchdog = `Smartcore\SmartcoreWatchdog` // legacy — kept for clean uninstall
 )
 
 type AgentTaskSpec struct {

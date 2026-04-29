@@ -27,12 +27,15 @@ func NewLoop(client *api.Client, interval time.Duration, version string, notifie
 	return &Loop{client: client, interval: interval, version: version, notifier: notifier}
 }
 
-// Run sends a heartbeat every interval.
-// Uses randomized jitter so 2000 agents don't sync into one stampede.
+// Run sends a heartbeat every interval ± up to 33% jitter. The jitter
+// matters at scale: with 1000 employees logging in at 8am, a fixed
+// 60-second interval would create a stampeding-herd pattern that
+// hammers the backend in 1-second bursts. Per-cycle jitter spreads the
+// load across a 40-80 second window instead.
+//
 // Backs off exponentially on consecutive failures up to a 5 minute cap.
 func (l *Loop) Run(ctx context.Context) {
-	jitter := time.Duration(rand.Int63n(int64(l.interval)))
-	timer := time.NewTimer(jitter)
+	timer := time.NewTimer(l.firstDelay())
 	defer timer.Stop()
 
 	failures := 0
@@ -45,7 +48,7 @@ func (l *Loop) Run(ctx context.Context) {
 		}
 
 		err := l.sendOne(ctx)
-		next := l.interval
+		next := l.jittered()
 		if err != nil {
 			failures++
 			next = backoff(failures, l.interval)
@@ -59,6 +62,21 @@ func (l *Loop) Run(ctx context.Context) {
 
 		timer.Reset(next)
 	}
+}
+
+// firstDelay randomises the very first heartbeat across a full interval.
+// Important when many machines start within seconds of each other (logon
+// storm at 8am) — without it everyone heartbeats at second 60.
+func (l *Loop) firstDelay() time.Duration {
+	return time.Duration(rand.Int63n(int64(l.interval)))
+}
+
+// jittered returns interval ± 33% so subsequent heartbeats stay spread.
+func (l *Loop) jittered() time.Duration {
+	base := int64(l.interval)
+	spread := base / 3
+	delta := rand.Int63n(2*spread) - spread // [-spread, +spread]
+	return time.Duration(base + delta)
 }
 
 func (l *Loop) sendOne(ctx context.Context) error {

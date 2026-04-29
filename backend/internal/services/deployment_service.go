@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,11 +16,19 @@ import (
 )
 
 var (
-	ErrDeploymentTokenInvalid    = errors.New("deployment token invalid or expired")
-	ErrDeploymentTokenExhausted  = errors.New("deployment token has reached max uses")
+	ErrDeploymentTokenInvalid     = errors.New("deployment token invalid or expired")
+	ErrDeploymentTokenExhausted   = errors.New("deployment token has reached max uses")
 	ErrDeploymentDomainNotAllowed = errors.New("email domain not allowed by deployment token")
-	ErrNoActiveDeploymentToken   = errors.New("no active deployment token configured")
+	ErrDeploymentEmailRequired    = errors.New("this deployment requires an employee email")
+	ErrDeploymentCodeFormat       = errors.New("code may only contain letters, digits, hyphens and underscores")
+	ErrDeploymentCodeTaken        = errors.New("a deployment token with that code already exists")
+	ErrNoActiveDeploymentToken    = errors.New("no active deployment token configured")
 )
+
+// codeFormat allows letters, digits, hyphens, underscores; 2-32 chars.
+// Codes are normalised to upper case at creation so case-insensitive
+// match at enroll time is a simple equality check.
+var codeFormat = regexp.MustCompile(`^[A-Z0-9_-]{2,32}$`)
 
 type DeploymentService struct {
 	db          *database.DB
@@ -41,10 +50,23 @@ func (s *DeploymentService) Create(
 	if req.TTLDays <= 0 {
 		req.TTLDays = 365
 	}
-	code, err := generateDeploymentCode()
-	if err != nil {
-		return nil, err
+
+	// Choose / validate code. If admin gave one, accept it (uppercased);
+	// otherwise generate a random DEP-XXXX-XXXX-XXXX-XXXX value.
+	var code string
+	if req.Code != "" {
+		code = strings.ToUpper(strings.TrimSpace(req.Code))
+		if !codeFormat.MatchString(code) {
+			return nil, ErrDeploymentCodeFormat
+		}
+	} else {
+		generated, err := generateDeploymentCode()
+		if err != nil {
+			return nil, err
+		}
+		code = generated
 	}
+
 	expiresAt := time.Now().Add(time.Duration(req.TTLDays) * 24 * time.Hour)
 
 	tx, err := s.db.Pool.Begin(ctx)
@@ -53,8 +75,6 @@ func (s *DeploymentService) Create(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// If SetActive, deactivate any existing active token first. The
-	// partial unique index would otherwise reject the insert.
 	if req.SetActive {
 		if _, err := tx.Exec(ctx, `
 			UPDATE deployment_tokens SET is_active = FALSE WHERE is_active = TRUE
@@ -67,20 +87,23 @@ func (s *DeploymentService) Create(
 	err = tx.QueryRow(ctx, `
 		INSERT INTO deployment_tokens (
 			code, name, description, created_by, expires_at, max_uses,
-			is_active, allowed_email_domains
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			is_active, allowed_email_domains, require_email
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, code, name, description, created_by, created_at, updated_at,
 		          expires_at, revoked_at, max_uses, current_uses, is_active,
-		          allowed_email_domains
+		          allowed_email_domains, require_email
 	`,
 		code, req.Name, req.Description, createdBy, expiresAt, req.MaxUses,
-		req.SetActive, normalizeDomains(req.AllowedEmailDomains),
+		req.SetActive, normalizeDomains(req.AllowedEmailDomains), req.RequireEmail,
 	).Scan(
 		&t.ID, &t.Code, &t.Name, &t.Description, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
 		&t.ExpiresAt, &t.RevokedAt, &t.MaxUses, &t.CurrentUses, &t.IsActive,
-		&t.AllowedEmailDomains,
+		&t.AllowedEmailDomains, &t.RequireEmail,
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrDeploymentCodeTaken
+		}
 		return nil, fmt.Errorf("insert token: %w", err)
 	}
 
@@ -99,7 +122,7 @@ func (s *DeploymentService) List(ctx context.Context, includeRevoked bool) ([]mo
 	rows, err := s.db.Pool.Query(ctx, `
 		SELECT id, code, name, description, created_by, created_at, updated_at,
 		       expires_at, revoked_at, max_uses, current_uses, is_active,
-		       allowed_email_domains
+		       allowed_email_domains, require_email
 		FROM deployment_tokens
 		WHERE `+where+`
 		ORDER BY is_active DESC, created_at DESC
@@ -116,7 +139,7 @@ func (s *DeploymentService) List(ctx context.Context, includeRevoked bool) ([]mo
 		if err := rows.Scan(
 			&t.ID, &t.Code, &t.Name, &t.Description, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
 			&t.ExpiresAt, &t.RevokedAt, &t.MaxUses, &t.CurrentUses, &t.IsActive,
-			&t.AllowedEmailDomains,
+			&t.AllowedEmailDomains, &t.RequireEmail,
 		); err != nil {
 			return nil, err
 		}
@@ -156,9 +179,7 @@ func (s *DeploymentService) SetActive(ctx context.Context, id uuid.UUID) error {
 	ct, err := tx.Exec(ctx, `
 		UPDATE deployment_tokens
 		SET is_active = TRUE
-		WHERE id = $1
-		  AND revoked_at IS NULL
-		  AND expires_at > NOW()
+		WHERE id = $1 AND revoked_at IS NULL AND expires_at > NOW()
 	`, id)
 	if err != nil {
 		return err
@@ -169,25 +190,19 @@ func (s *DeploymentService) SetActive(ctx context.Context, id uuid.UUID) error {
 	return tx.Commit(ctx)
 }
 
-// GetActiveToken returns the currently published deployment token, used by
-// the public /install/config endpoint. Returns nil with no error when
-// nothing is active so the installer can show a friendly "not deployed
-// yet" message.
 func (s *DeploymentService) GetActiveToken(ctx context.Context) (*models.DeploymentToken, error) {
 	var t models.DeploymentToken
 	err := s.db.Pool.QueryRow(ctx, `
 		SELECT id, code, name, description, created_by, created_at, updated_at,
 		       expires_at, revoked_at, max_uses, current_uses, is_active,
-		       allowed_email_domains
+		       allowed_email_domains, require_email
 		FROM deployment_tokens
-		WHERE is_active = TRUE
-		  AND revoked_at IS NULL
-		  AND expires_at > NOW()
+		WHERE is_active = TRUE AND revoked_at IS NULL AND expires_at > NOW()
 		LIMIT 1
 	`).Scan(
 		&t.ID, &t.Code, &t.Name, &t.Description, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
 		&t.ExpiresAt, &t.RevokedAt, &t.MaxUses, &t.CurrentUses, &t.IsActive,
-		&t.AllowedEmailDomains,
+		&t.AllowedEmailDomains, &t.RequireEmail,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -200,10 +215,14 @@ func (s *DeploymentService) GetActiveToken(ctx context.Context) (*models.Deploym
 
 // === Enrollment ===
 
-// EnrollMachine validates the deployment code, atomically increments the
-// usage counter, then creates a new machine row with a freshly minted
-// auth token. Returns the same shape as RegisterMachine so the agent code
-// path can stay symmetric.
+// EnrollMachine validates the deployment code (case-insensitive),
+// atomically increments the usage counter, then creates a new machine
+// row with a freshly minted auth token.
+//
+// Identity rules:
+//   - If the token has require_email=true, EmployeeEmail is mandatory.
+//   - Otherwise we synthesise <windows_user>@<hostname>.local when no
+//     email is provided so every machine still has a stable identifier.
 func (s *DeploymentService) EnrollMachine(
 	ctx context.Context,
 	req models.EnrollRequest,
@@ -220,19 +239,23 @@ func (s *DeploymentService) EnrollMachine(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var (
-		tokenID         uuid.UUID
-		expiresAt       time.Time
-		revokedAt       *time.Time
-		maxUses         *int
-		currentUses     int
-		allowedDomains  []string
+		tokenID        uuid.UUID
+		expiresAt      time.Time
+		revokedAt      *time.Time
+		maxUses        *int
+		currentUses    int
+		allowedDomains []string
+		requireEmail   bool
 	)
 	err = tx.QueryRow(ctx, `
-		SELECT id, expires_at, revoked_at, max_uses, current_uses, allowed_email_domains
+		SELECT id, expires_at, revoked_at, max_uses, current_uses,
+		       allowed_email_domains, require_email
 		FROM deployment_tokens
 		WHERE code = $1
 		FOR UPDATE
-	`, req.DeploymentCode).Scan(&tokenID, &expiresAt, &revokedAt, &maxUses, &currentUses, &allowedDomains)
+	`, strings.ToUpper(strings.TrimSpace(req.DeploymentCode))).Scan(
+		&tokenID, &expiresAt, &revokedAt, &maxUses, &currentUses, &allowedDomains, &requireEmail,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrDeploymentTokenInvalid
 	}
@@ -245,16 +268,24 @@ func (s *DeploymentService) EnrollMachine(
 	if maxUses != nil && currentUses >= *maxUses {
 		return nil, ErrDeploymentTokenExhausted
 	}
-	if !emailDomainAllowed(req.EmployeeEmail, allowedDomains) {
+
+	email := strings.ToLower(strings.TrimSpace(req.EmployeeEmail))
+	if requireEmail && email == "" {
+		return nil, ErrDeploymentEmailRequired
+	}
+	if email != "" && !emailDomainAllowed(email, allowedDomains) {
 		return nil, ErrDeploymentDomainNotAllowed
+	}
+	if email == "" {
+		email = synthesiseIdentity(req.WindowsUser, req.Info.Hostname)
 	}
 
 	employeeName := req.EmployeeName
 	if employeeName == "" {
-		employeeName = strings.SplitN(req.EmployeeEmail, "@", 2)[0]
-		if req.WindowsUser != "" {
-			employeeName = req.WindowsUser
-		}
+		employeeName = req.WindowsUser
+	}
+	if employeeName == "" {
+		employeeName = strings.SplitN(email, "@", 2)[0]
 	}
 
 	var machineID uuid.UUID
@@ -272,7 +303,7 @@ func (s *DeploymentService) EnrollMachine(
 		)
 		RETURNING id
 	`,
-		authToken, strings.ToLower(req.EmployeeEmail), employeeName,
+		authToken, email, employeeName,
 		req.Info.Hostname, req.Info.OSVersion, req.Info.OSBuild, req.Info.CPUModel, req.Info.RAMTotalMB,
 		req.Info.Timezone, req.Info.Locale, req.Info.AgentVersion,
 		tokenID,
@@ -295,7 +326,7 @@ func (s *DeploymentService) EnrollMachine(
 		MachineID:     machineID,
 		AuthToken:     authToken,
 		EmployeeName:  employeeName,
-		EmployeeEmail: strings.ToLower(req.EmployeeEmail),
+		EmployeeEmail: email,
 	}, nil
 }
 
@@ -329,9 +360,34 @@ func normalizeDomains(in []string) []string {
 	return out
 }
 
-// generateDeploymentCode produces a code like "DEP-A3F7-K9B2-X4M1-Q8N5".
-// 4 groups (vs onboarding's 3) makes brute-forcing impractical for a
-// long-lived shared token.
+// synthesiseIdentity builds a stable "email-shape" identifier when no
+// real email is provided. e.g. "tom@DESKTOP-AB12.local". Lower-cased
+// to keep the email column normalised.
+func synthesiseIdentity(winUser, hostname string) string {
+	user := strings.ToLower(strings.TrimSpace(winUser))
+	if user == "" {
+		user = "user"
+	}
+	host := strings.ToLower(strings.TrimSpace(hostname))
+	if host == "" {
+		host = "machine"
+	}
+	return fmt.Sprintf("%s@%s.local", user, host)
+}
+
+// isUniqueViolation reports whether err is a Postgres unique-constraint
+// violation (SQLSTATE 23505). We use a string match instead of
+// importing pgconn here because the service file already stays free of
+// driver-specific imports.
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "SQLSTATE 23505")
+}
+
+// generateDeploymentCode produces "DEP-A3F7-K9B2-X4M1-Q8N5". Used when
+// admin doesn't pass a custom code.
 func generateDeploymentCode() (string, error) {
 	const alphabet = "ABCDEFGHJKMNPQRSTVWXYZ23456789"
 	const groups = 4

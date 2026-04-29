@@ -121,9 +121,11 @@ export default function DeploymentPage() {
 function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [code, setCode] = useState("");
   const [ttlDays, setTtlDays] = useState(365);
   const [maxUses, setMaxUses] = useState("");
   const [allowedDomains, setAllowedDomains] = useState("");
+  const [requireEmail, setRequireEmail] = useState(false);
   const [setActive, setSetActive] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createdCode, setCreatedCode] = useState<string | null>(null);
@@ -134,6 +136,7 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
       setCreatedCode(data.code);
       setName("");
       setDescription("");
+      setCode("");
       setMaxUses("");
       setAllowedDomains("");
       setError(null);
@@ -159,9 +162,11 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
     mutation.mutate({
       name,
       description: description || undefined,
+      code: code.trim() ? code.trim() : undefined,
       ttl_days: ttlDays,
       max_uses: maxUsesNum && maxUsesNum > 0 ? maxUsesNum : undefined,
       allowed_email_domains: domains.length > 0 ? domains : undefined,
+      require_email: requireEmail,
       set_active: setActive,
     });
   }
@@ -169,6 +174,11 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
   return (
     <div className="rounded-lg border bg-white p-6 shadow-sm">
       <h3 className="text-base font-medium">Tạo token deployment</h3>
+      <p className="mt-1 text-xs text-slate-500">
+        Tạo 1 token, gửi cùng 1 link cho tất cả nhân viên. Mã có thể tự đặt (vd:{" "}
+        <code className="rounded bg-slate-100 px-1">PLAY</code>) — dễ nhớ để lồng vào video
+        đào tạo.
+      </p>
       <form onSubmit={handleSubmit} className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
         <div>
           <label className="block text-xs font-medium text-slate-600">
@@ -183,6 +193,23 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
           />
         </div>
         <div>
+          <label className="block text-xs font-medium text-slate-600">
+            Mã (tùy chọn — để trống sẽ tự sinh)
+          </label>
+          <input
+            type="text"
+            placeholder="PLAY"
+            maxLength={32}
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            pattern="[A-Z0-9_\-]*"
+            className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-sm uppercase"
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            2-32 ký tự: A-Z, 0-9, dấu gạch ngang. Không phân biệt hoa thường khi nhân viên gõ.
+          </p>
+        </div>
+        <div className="md:col-span-2">
           <label className="block text-xs font-medium text-slate-600">Mô tả (tùy chọn)</label>
           <input
             type="text"
@@ -216,17 +243,29 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
           />
         </div>
         <div className="md:col-span-2">
-          <label className="block text-xs font-medium text-slate-600">
-            Email domain được phép (comma-separated, để trống = mọi domain)
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={requireEmail}
+              onChange={(e) => setRequireEmail(e.target.checked)}
+            />
+            Bắt buộc nhập email khi cài (mặc định: chỉ cần mã, định danh = Windows user @ hostname)
           </label>
-          <input
-            type="text"
-            placeholder="smartxcore.com, xbflow.com"
-            value={allowedDomains}
-            onChange={(e) => setAllowedDomains(e.target.value)}
-            className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-          />
         </div>
+        {requireEmail && (
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-slate-600">
+              Email domain được phép (comma-separated, để trống = mọi domain)
+            </label>
+            <input
+              type="text"
+              placeholder="smartxcore.com, xbflow.com"
+              value={allowedDomains}
+              onChange={(e) => setAllowedDomains(e.target.value)}
+              className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+            />
+          </div>
+        )}
         <div className="md:col-span-2">
           <label className="flex items-center gap-2 text-sm">
             <input
@@ -234,7 +273,7 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
               checked={setActive}
               onChange={(e) => setSetActive(e.target.checked)}
             />
-            Đặt làm token đang hoạt động (active) — installer sẽ tự dùng token này
+            Đặt làm token đang hoạt động (active)
           </label>
         </div>
         <div className="md:col-span-2">
@@ -251,8 +290,8 @@ function CreateTokenForm({ onCreated }: { onCreated: () => void }) {
               </code>
               <p className="mt-1 text-xs text-emerald-700">
                 {setActive
-                  ? "Đã đặt làm active. Tất cả setup.exe sẽ tự dùng token này — chỉ cần gửi link https://smartxcore.com/install cho nhân viên."
-                  : "Token đã tạo nhưng chưa active. Click nút Active ở danh sách bên dưới khi sẵn sàng."}
+                  ? `Đã active. Cho nhân viên xem mã trong video đào tạo, gửi link https://smartxcore.com/install — họ tải, mở, gõ "${createdCode}" → xong.`
+                  : "Token đã tạo nhưng chưa active. Click Active ở danh sách bên dưới khi sẵn sàng."}
               </p>
             </div>
           )}
