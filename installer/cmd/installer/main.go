@@ -78,24 +78,46 @@ func run() error {
 	agentExe := filepath.Join(dataDir, "Smartcore.exe")
 
 	// Whole install runs as the doInstall closure called on a worker
-	// goroutine when the employee clicks Play. Keeping it inline here
-	// keeps every error path inside the closure visible to the GUI's
-	// status field.
+	// goroutine when the employee clicks Play. We do everything
+	// inline here (no spawning Smartcore.exe -enroll as an
+	// intermediate process) so the persistent Smartcore.exe -run
+	// shows up in Task Manager within ~600ms of click and reports
+	// "online" to the panel within ~1s.
 	doInstall := func() error {
 		killExistingAgent()
 		if err := extractPayload(dataDir); err != nil {
 			return fmt.Errorf("extract payload: %w", err)
 		}
 		// require_email path: synthesise from the OS user so the
-		// employee still doesn't type anything. Server will accept
-		// "<windows_user>@<hostname>.local" as a placeholder when the
-		// token allows it.
+		// employee still doesn't type anything. Server accepts
+		// "<windows_user>@<hostname>.local" as a placeholder when
+		// the deployment token is configured to require email.
 		email := ""
 		if cfg.RequireEmail {
 			email = synthesizeEmail()
 		}
-		if err := enrollAgent(agentExe, apiBase, deploymentCode, email); err != nil {
+		// 1. Enroll directly via HTTP (used to be a child process).
+		res, err := enrollDirect(apiBase, deploymentCode, email)
+		if err != nil {
 			return fmt.Errorf("enroll: %w", err)
+		}
+		// 2. Persist machine_id + auth_token so the agent finds
+		//    them on its first read of config.json.
+		if err := writeAgentConfig(dataDir, apiBase, res.MachineID, res.AuthToken); err != nil {
+			return fmt.Errorf("write config: %w", err)
+		}
+		// 3. Wire up auto-start at logon. Quoted exe path so spaces
+		//    in the username (vd "C:\Users\Nguyen Van A\...") don't
+		//    break parsing.
+		runCmd := fmt.Sprintf(`"%s" -run`, agentExe)
+		if err := setRunValue(runCmd); err != nil {
+			return fmt.Errorf("set run key: %w", err)
+		}
+		// 4. Spawn the persistent Smartcore.exe -run NOW so the
+		//    user doesn't have to log out / back in. Detached so
+		//    the agent survives setup.exe exiting.
+		if err := spawnDetached(agentExe, "-run"); err != nil {
+			return fmt.Errorf("spawn agent: %w", err)
 		}
 		return nil
 	}

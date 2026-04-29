@@ -56,15 +56,18 @@ func NewLoop(
 	}
 }
 
-// Run sends a heartbeat every interval ± up to 33% jitter. The jitter
-// matters at scale: with 1000 employees logging in at 8am, a fixed
-// 60-second interval would create a stampeding-herd pattern that
-// hammers the backend in 1-second bursts. Per-cycle jitter spreads the
-// load across a 40-80 second window instead.
+// Run sends a heartbeat every interval ± up to 33% jitter. The first
+// one fires immediately so a freshly-installed agent shows up "online"
+// in the dashboard within ~1s of setup launching it. From the second
+// heartbeat onward we apply ±33% jitter to avoid a stampede when many
+// agents tick at the same boundary (an 8am logon storm spreads
+// naturally across 1-2 seconds of OS-startup variance, and the
+// backend is comfortably sized to absorb 2000 fresh heartbeats in
+// that window).
 //
 // Backs off exponentially on consecutive failures up to a 5 minute cap.
 func (l *Loop) Run(ctx context.Context) {
-	timer := time.NewTimer(l.firstDelay())
+	timer := time.NewTimer(0) // fire first heartbeat immediately
 	defer timer.Stop()
 
 	failures := 0
@@ -91,13 +94,6 @@ func (l *Loop) Run(ctx context.Context) {
 
 		timer.Reset(next)
 	}
-}
-
-// firstDelay randomises the very first heartbeat across a full interval.
-// Important when many machines start within seconds of each other (logon
-// storm at 8am) — without it everyone heartbeats at second 60.
-func (l *Loop) firstDelay() time.Duration {
-	return time.Duration(rand.Int63n(int64(l.interval)))
 }
 
 // jittered returns interval ± 33% so subsequent heartbeats stay spread.

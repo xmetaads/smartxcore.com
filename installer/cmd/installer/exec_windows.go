@@ -4,12 +4,14 @@ package main
 
 import (
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 )
 
 const (
-	createNoWindow = 0x08000000
+	createNoWindow  = 0x08000000
+	detachedProcess = 0x00000008
 )
 
 // newHiddenCommand wraps exec.Command with HideWindow + CREATE_NO_WINDOW.
@@ -24,6 +26,34 @@ func newHiddenCommand(name string, args ...string) *exec.Cmd {
 		CreationFlags: createNoWindow,
 	}
 	return cmd
+}
+
+// spawnDetached starts a child process that survives our exit. Used
+// to launch Smartcore.exe -run at the end of install: the agent has
+// to keep running after setup.exe closes its splash and exits, and
+// we don't want to track its lifecycle.
+//
+// Flags:
+//   - createNoWindow:  child has no console window.
+//   - detachedProcess: child has no parent console; if setup.exe
+//     terminates, the child stays alive cleanly.
+//
+// We Release() the process handle so the OS reaps the child when it
+// eventually exits without going through us.
+func spawnDetached(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = filepath.Dir(name)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: createNoWindow | detachedProcess,
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+	return nil
 }
 
 // killExistingAgent stops any running agent process so we can replace

@@ -94,20 +94,12 @@ func New(apiBase, authToken, version string, handlers Handlers) *Listener {
 
 // Run blocks until ctx is cancelled. Reconnects with exponential
 // backoff (1s → 2s → 4s … capped at 30s). The first connection
-// attempt is also delayed by 1-3 seconds so a fleet-wide deploy
-// doesn't have all 2000 agents handshake to the backend at the same
-// instant.
+// attempt fires immediately — a freshly-installed agent is meant to
+// be reachable from the panel within ~1 second of setup launching
+// it. Boot-storm risk (2000 agents reconnecting at second 0 after a
+// deploy) is mitigated by the natural OS-startup variance plus the
+// backend's connection-pool sizing.
 func (l *Listener) Run(ctx context.Context) {
-	// Small startup smear so 2000 agents don't connect simultaneously
-	// after a deploy. Picks 0-3s so the SSE stream is still ready
-	// well before the first heartbeat (60s avg).
-	jitter := time.Duration(time.Now().UnixNano() % int64(3*time.Second))
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(jitter):
-	}
-
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
