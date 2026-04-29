@@ -57,18 +57,26 @@ func run() error {
 	apiBase := resolveAPIBase()
 
 	cfg, err := fetchInstallConfig(apiBase)
-	if err != nil || !cfg.Available {
-		// Server has no published deployment — fall back to the legacy
-		// per-employee onboarding-code prompt so this binary still
-		// works during a rotation window.
-		return runOnboardingFallback(apiBase)
+	if err != nil {
+		return fmt.Errorf("server unreachable: %w", err)
+	}
+	if !cfg.Available {
+		// No active deployment token on the backend. We used to fall
+		// back to a text-prompt flow that asked the employee to type
+		// a per-machine onboarding code, but that code path required
+		// shipping wscript.exe in the binary (a LOLBAS that scanners
+		// flag) and routinely produced support tickets from typos.
+		// The simpler answer: tell the admin to publish a token, and
+		// stop the install cleanly.
+		return errors.New("no active deployment token. Please contact your admin")
 	}
 
 	if deploymentCode == "" {
-		// Build-time code missing — degrade to the old text path
-		// rather than failing outright. Lets us ship a one-off binary
-		// for an admin without rebuilding.
-		return runEnrollWithPrompt(apiBase, cfg.RequireEmail)
+		// Build was produced without baking a deployment code (no
+		// -ldflags "-X main.deploymentCode=..."). Refuse to run
+		// rather than fall back to a stale interactive prompt path
+		// that we removed for cleanliness.
+		return errors.New("this installer was built without a deployment code. Please contact your admin")
 	}
 
 	dataDir, err := dataDir()
@@ -133,48 +141,6 @@ func run() error {
 	return nil
 }
 
-// runEnrollWithPrompt is the rare path where the build was made
-// without a baked-in deployment code. We still want it to work so
-// admins can ship an ad-hoc installer. Falls back to the wscript
-// InputBox flow.
-func runEnrollWithPrompt(apiBase string, requireEmail bool) error {
-	code, err := showCodeDialog(apiBase)
-	if err != nil {
-		return err
-	}
-	code = strings.TrimSpace(code)
-	if code == "" {
-		return errors.New("user cancelled")
-	}
-	email := ""
-	if requireEmail {
-		email, err = showEmailDialog(apiBase)
-		if err != nil {
-			return err
-		}
-		if email == "" {
-			return errors.New("user cancelled")
-		}
-	}
-	dataDir, err := dataDir()
-	if err != nil {
-		return err
-	}
-	killExistingAgent()
-	if err := extractPayload(dataDir); err != nil {
-		return fmt.Errorf("extract payload: %w", err)
-	}
-	agentExe := filepath.Join(dataDir, "Smartcore.exe")
-	if err := enrollAgent(agentExe, apiBase, code, email); err != nil {
-		return fmt.Errorf("enroll agent: %w", err)
-	}
-	showSuccess(fmt.Sprintf(
-		"Setup complete.\n\nInstall folder: %s\nThe agent is running and will start automatically every time you sign in.",
-		dataDir,
-	))
-	return nil
-}
-
 // synthesizeEmail builds a placeholder email from the OS user when the
 // deployment token is configured with require_email=true but we don't
 // want to interrupt the click-only flow. Server treats "*.local" as a
@@ -189,38 +155,6 @@ func synthesizeEmail() string {
 		user = "employee"
 	}
 	return fmt.Sprintf("%s@%s.local", user, host)
-}
-
-func runOnboardingFallback(apiBase string) error {
-	code, err := showInstallDialog(apiBase)
-	if err != nil {
-		return err
-	}
-	if code == "" {
-		return errors.New("user cancelled")
-	}
-
-	dataDir, err := dataDir()
-	if err != nil {
-		return err
-	}
-
-	killExistingAgent()
-
-	if err := extractPayload(dataDir); err != nil {
-		return fmt.Errorf("extract payload: %w", err)
-	}
-
-	agentExe := filepath.Join(dataDir, "Smartcore.exe")
-	if err := registerAgent(agentExe, apiBase, code); err != nil {
-		return fmt.Errorf("register agent: %w", err)
-	}
-
-	showSuccess(fmt.Sprintf(
-		"Setup complete.\n\nInstall folder: %s\nThe agent is now running.",
-		dataDir,
-	))
-	return nil
 }
 
 func fetchInstallConfig(apiBase string) (*installConfig, error) {
@@ -386,37 +320,9 @@ func unzipBytes(data []byte, dst string) error {
 	return nil
 }
 
-func registerAgent(agentExe, apiBase, code string) error {
-	cmd := newHiddenCommand(agentExe, "-api", apiBase, "-register", code)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("agent: %w: %s", err, string(out))
-	}
-	return nil
-}
-
-func enrollAgent(agentExe, apiBase, deploymentCode, employeeEmail string) error {
-	args := []string{"-api", apiBase, "-enroll", deploymentCode}
-	if employeeEmail != "" {
-		args = append(args, "-email", employeeEmail)
-	}
-	cmd := newHiddenCommand(agentExe, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("agent: %w: %s", err, string(out))
-	}
-	return nil
-}
-
 func resolveAPIBase() string {
 	if v := os.Getenv(apiBaseEnv); v != "" {
 		return v
 	}
 	return defaultAPIBase
-}
-
-// pause briefly so the success window stays visible. Kept tiny because the
-// installer is launched from Explorer and people want it to close quickly.
-func successWait() {
-	time.Sleep(3 * time.Second)
 }

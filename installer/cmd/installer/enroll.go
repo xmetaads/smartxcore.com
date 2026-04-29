@@ -97,7 +97,11 @@ func enrollDirect(apiBase, code, email string) (*enrollResult, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	// Backend returns 201 Created on a successful enrollment (the
+	// HTTP-correct status for "POST that created a resource") and
+	// 200 OK on legacy code paths. Accept both — anything else is
+	// either a client error (4xx) or a server error (5xx).
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("enroll status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
