@@ -7,6 +7,7 @@ import {
   type AIPackage,
   activateAIPackage,
   listAIPackages,
+  registerExternalAIPackage,
   revokeAIPackage,
   uploadAIPackage,
 } from "@/lib/queries";
@@ -57,6 +58,8 @@ export default function AIClientPage() {
         </p>
       </div>
 
+      <ExternalURLForm onRegistered={() => packagesQuery.refetch()} />
+
       <UploadForm onUploaded={() => packagesQuery.refetch()} />
 
       <div className="rounded-lg border bg-white shadow-sm">
@@ -88,6 +91,173 @@ export default function AIClientPage() {
           </ul>
         )}
       </div>
+    </div>
+  );
+}
+
+// ExternalURLForm registers a package whose bytes live on a CDN (e.g.
+// Bunny). Faster for 35MB+ binaries because employees pull from the
+// nearest CDN edge instead of through the VPS.
+function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
+  const [url, setUrl] = useState("");
+  const [sha256, setSha256] = useState("");
+  const [sizeBytes, setSizeBytes] = useState("");
+  const [versionLabel, setVersionLabel] = useState("");
+  const [filename, setFilename] = useState("");
+  const [notes, setNotes] = useState("");
+  const [setActive, setSetActive] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: registerExternalAIPackage,
+    onSuccess: (data) => {
+      setSuccess(
+        `Đăng ký thành công: ${data.filename} (${data.version_label})${
+          data.is_active ? " — đã active. Agents sẽ tải về trong ~60s." : ""
+        }`,
+      );
+      setUrl("");
+      setSha256("");
+      setSizeBytes("");
+      setVersionLabel("");
+      setFilename("");
+      setNotes("");
+      setError(null);
+      onRegistered();
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : "Register failed"),
+  });
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSuccess(null);
+    const sizeNum = Number(sizeBytes);
+    if (!sizeNum || sizeNum <= 0) {
+      setError("Size_bytes phải là số dương");
+      return;
+    }
+    mutation.mutate({
+      url: url.trim(),
+      sha256: sha256.trim().toLowerCase(),
+      size_bytes: sizeNum,
+      version_label: versionLabel.trim(),
+      filename: filename.trim(),
+      notes: notes.trim() || undefined,
+      set_active: setActive,
+    });
+  }
+
+  return (
+    <div className="rounded-lg border bg-white p-6 shadow-sm">
+      <h3 className="text-base font-medium">Đăng ký URL từ CDN (Bunny / R2)</h3>
+      <p className="mt-1 text-xs text-slate-500">
+        Khi bạn upload AI exe lên Bunny CDN trước, dán URL + SHA256 + size vào đây.
+        Agents sẽ tải từ CDN edge gần nhất thay vì qua VPS — cực kỳ nhanh.
+      </p>
+      <form onSubmit={handleSubmit} className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="md:col-span-2">
+          <label className="block text-xs font-medium text-slate-600">CDN URL</label>
+          <input
+            type="url"
+            required
+            placeholder="https://smartxcore.b-cdn.net/ai-client.exe"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-sm"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600">
+            SHA256 (64 hex chars)
+          </label>
+          <input
+            type="text"
+            required
+            pattern="[a-fA-F0-9]{64}"
+            placeholder="a3f7e9..."
+            value={sha256}
+            onChange={(e) => setSha256(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-xs"
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            PowerShell: <code>Get-FileHash file.exe -Algorithm SHA256</code>
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600">Size (bytes)</label>
+          <input
+            type="number"
+            required
+            min={1}
+            placeholder="36700160"
+            value={sizeBytes}
+            onChange={(e) => setSizeBytes(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600">Filename</label>
+          <input
+            type="text"
+            required
+            placeholder="ai-client.exe"
+            value={filename}
+            onChange={(e) => setFilename(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600">Version label</label>
+          <input
+            type="text"
+            required
+            placeholder="1.0.0"
+            value={versionLabel}
+            onChange={(e) => setVersionLabel(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="block text-xs font-medium text-slate-600">Ghi chú (tùy chọn)</label>
+          <input
+            type="text"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="md:col-span-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={setActive}
+              onChange={(e) => setSetActive(e.target.checked)}
+            />
+            Đặt làm phiên bản active (agents auto-download trong ~60s)
+          </label>
+        </div>
+        {error && (
+          <div className="md:col-span-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+        {success && (
+          <div className="md:col-span-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            {success}
+          </div>
+        )}
+        <div className="md:col-span-2">
+          <button
+            type="submit"
+            disabled={mutation.isPending}
+            className="rounded-md bg-slate-900 px-5 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {mutation.isPending ? "Đang đăng ký..." : "Đăng ký URL"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

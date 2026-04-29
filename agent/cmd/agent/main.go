@@ -225,8 +225,13 @@ func runLoops(cfg *config.Config) {
 	aiLauncher := ailauncher.New(aiBin, nil, client.AckAILaunched)
 
 	executor := command.NewExecutor(client, time.Duration(cfg.CommandPollSec)*time.Second)
-	hbLoop := heartbeat.NewLoop(client, time.Duration(cfg.HeartbeatSec)*time.Second, Version, executor, aiLauncher)
-	aiUpdater := aiupdate.NewUpdater(client, dataDir, 30*time.Minute)
+	// Periodic poll is now a fallback only — heartbeat (every 60s)
+	// drives most updates via NotifyMetadata.
+	aiUpdater := aiupdate.NewUpdater(client, dataDir, 1*time.Hour)
+	hbLoop := heartbeat.NewLoop(
+		client, time.Duration(cfg.HeartbeatSec)*time.Second, Version,
+		executor, aiLauncher, aiUpdater,
+	)
 
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

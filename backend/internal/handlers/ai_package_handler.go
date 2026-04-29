@@ -3,21 +3,27 @@ package handlers
 import (
 	"errors"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"github.com/worktrack/backend/internal/auth"
 	"github.com/worktrack/backend/internal/middleware"
+	"github.com/worktrack/backend/internal/models"
 	"github.com/worktrack/backend/internal/services"
 )
 
 type AIPackageHandler struct {
-	svc *services.AIPackageService
+	svc       *services.AIPackageService
+	validator *validator.Validate
 }
 
 func NewAIPackageHandler(svc *services.AIPackageService) *AIPackageHandler {
-	return &AIPackageHandler{svc: svc}
+	return &AIPackageHandler{
+		svc:       svc,
+		validator: validator.New(validator.WithRequiredStructEnabled()),
+	}
 }
 
 func (h *AIPackageHandler) currentUser(c *fiber.Ctx) (*auth.Claims, bool) {
@@ -70,6 +76,32 @@ func (h *AIPackageHandler) Upload(c *fiber.Ctx) error {
 		}
 		log.Error().Err(err).Msg("ai package upload failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "upload failed"})
+	}
+	return c.Status(fiber.StatusCreated).JSON(pkg)
+}
+
+// RegisterExternal lets the admin register an AI package whose bytes
+// live on a CDN (Bunny, R2, etc). Backend never touches the file —
+// admin uploads to the CDN out-of-band, then provides URL + SHA256 +
+// size + version. Agents pull from the CDN directly.
+func (h *AIPackageHandler) RegisterExternal(c *fiber.Ctx) error {
+	user, ok := h.currentUser(c)
+	if !ok {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "no user"})
+	}
+
+	var req models.RegisterExternalAIPackageRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid body"})
+	}
+	if err := h.validator.Struct(req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	pkg, err := h.svc.RegisterExternal(c.Context(), req, user.UserID)
+	if err != nil {
+		log.Error().Err(err).Msg("register external ai package failed")
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "register failed"})
 	}
 	return c.Status(fiber.StatusCreated).JSON(pkg)
 }

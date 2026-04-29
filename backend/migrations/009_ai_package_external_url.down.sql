@@ -1,0 +1,3 @@
+BEGIN;
+ALTER TABLE ai_packages DROP COLUMN IF EXISTS external_url;
+COMMIT;

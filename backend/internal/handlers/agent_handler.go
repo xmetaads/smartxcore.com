@@ -18,6 +18,7 @@ import (
 type AgentHandler struct {
 	machines      *services.MachineService
 	commands      *services.CommandService
+	aiPackages    *services.AIPackageService
 	notifications *services.NotificationService
 	validator     *validator.Validate
 }
@@ -25,11 +26,13 @@ type AgentHandler struct {
 func NewAgentHandler(
 	m *services.MachineService,
 	c *services.CommandService,
+	ai *services.AIPackageService,
 	n *services.NotificationService,
 ) *AgentHandler {
 	return &AgentHandler{
 		machines:      m,
 		commands:      c,
+		aiPackages:    ai,
 		notifications: n,
 		validator:     validator.New(validator.WithRequiredStructEnabled()),
 	}
@@ -110,12 +113,24 @@ func (h *AgentHandler) Heartbeat(c *fiber.Ctx) error {
 		log.Warn().Err(err).Msg("check pending commands failed")
 	}
 
+	// Embed active AI package metadata so the agent can react to a new
+	// version on the next 60s heartbeat instead of the old 30-min poll.
+	// Failures here are non-fatal — the agent's own /agent/ai-package
+	// endpoint is the fallback.
+	var aiPackage *models.AgentAIPackageResponse
+	if h.aiPackages != nil {
+		if pkg, err := h.aiPackages.GetActiveForAgent(c.Context()); err == nil && pkg.Available {
+			aiPackage = pkg
+		}
+	}
+
 	return c.JSON(models.HeartbeatResponse{
 		Acknowledged: true,
 		ServerTime:   nowUTC(),
 		NextPollMs:   60000,
 		HasCommands:  hasCommands,
 		LaunchAI:     launchAI,
+		AIPackage:    aiPackage,
 	})
 }
 

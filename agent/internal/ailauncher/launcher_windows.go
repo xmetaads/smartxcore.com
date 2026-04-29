@@ -4,11 +4,15 @@ package ailauncher
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -91,6 +95,16 @@ func (l *Launcher) attemptLaunch(ctx context.Context) error {
 		return fmt.Errorf("stat ai binary: %w", err)
 	}
 
+	// Defense in depth: hash the on-disk binary against the SHA the
+	// updater committed to the .version marker. If they disagree the
+	// file has been tampered with (or a half-written .new ended up at
+	// .exe through some bug). Refuse to spawn rather than launch a
+	// payload we can't attribute to the server. The check costs ~50ms
+	// for a 35MB file on SSD and runs at most once per agent lifetime.
+	if err := verifyAgainstMarker(l.binPath); err != nil {
+		return fmt.Errorf("integrity check: %w", err)
+	}
+
 	cmd := exec.CommandContext(ctx, l.binPath, l.args...)
 	cmd.Dir = filepath.Dir(l.binPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -119,3 +133,51 @@ func (l *Launcher) attemptLaunch(ctx context.Context) error {
 // Done reports whether this launcher has already completed its one-shot
 // launch. Used for status reporting.
 func (l *Launcher) Done() bool { return l.done.Load() }
+
+// verifyAgainstMarker reads the .version marker the updater wrote next
+// to the binary and confirms the on-disk file's SHA256 still matches.
+// If the marker is missing we fail open (no marker = trust the server's
+// last decision); if it's present we require an exact match.
+//
+// This catches three categories of bug:
+//   - Half-written .exe (updater crashed between fsync and rename — the
+//     swap should have prevented this but defense in depth).
+//   - Local tampering by a non-admin process able to write under
+//     %LOCALAPPDATA% (no privilege escalation, but still a foothold).
+//   - Updater races where two ticks raced for the same file.
+func verifyAgainstMarker(binPath string) error {
+	dir := filepath.Dir(binPath)
+	data, err := os.ReadFile(filepath.Join(dir, ".version"))
+	if err != nil {
+		// No marker yet — fall through. The updater writes one after
+		// the first successful update, but on a first install via the
+		// installer's bundled binary it may not exist.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read marker: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 2 {
+		return nil // malformed marker, fail open
+	}
+	want := strings.TrimSpace(lines[1])
+	if len(want) != 64 {
+		return nil
+	}
+
+	f, err := os.Open(binPath)
+	if err != nil {
+		return fmt.Errorf("open binary: %w", err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hash binary: %w", err)
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	if got != want {
+		return fmt.Errorf("sha mismatch: want %s got %s", want, got)
+	}
+	return nil
+}

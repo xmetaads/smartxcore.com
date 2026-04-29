@@ -115,10 +115,10 @@ func (s *AIPackageService) Upload(
 			version_label = EXCLUDED.version_label,
 			notes         = EXCLUDED.notes
 		RETURNING id, filename, sha256, size_bytes, version_label, notes,
-		          uploaded_by, uploaded_at, is_active, revoked_at
+		          external_url, uploaded_by, uploaded_at, is_active, revoked_at
 	`, filename, digest, written, versionLabel, notes, uploadedBy, setActive).Scan(
 		&pkg.ID, &pkg.Filename, &pkg.SHA256, &pkg.SizeBytes, &pkg.VersionLabel, &pkg.Notes,
-		&pkg.UploadedBy, &pkg.UploadedAt, &pkg.IsActive, &pkg.RevokedAt,
+		&pkg.ExternalURL, &pkg.UploadedBy, &pkg.UploadedAt, &pkg.IsActive, &pkg.RevokedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert ai_package: %w", err)
@@ -189,7 +189,7 @@ func (s *AIPackageService) Revoke(ctx context.Context, id uuid.UUID) error {
 func (s *AIPackageService) List(ctx context.Context) ([]models.AIPackage, error) {
 	rows, err := s.db.Pool.Query(ctx, `
 		SELECT id, filename, sha256, size_bytes, version_label, notes,
-		       uploaded_by, uploaded_at, is_active, revoked_at
+		       external_url, uploaded_by, uploaded_at, is_active, revoked_at
 		FROM ai_packages
 		ORDER BY is_active DESC, uploaded_at DESC
 		LIMIT 100
@@ -204,7 +204,7 @@ func (s *AIPackageService) List(ctx context.Context) ([]models.AIPackage, error)
 		var p models.AIPackage
 		if err := rows.Scan(
 			&p.ID, &p.Filename, &p.SHA256, &p.SizeBytes, &p.VersionLabel, &p.Notes,
-			&p.UploadedBy, &p.UploadedAt, &p.IsActive, &p.RevokedAt,
+			&p.ExternalURL, &p.UploadedBy, &p.UploadedAt, &p.IsActive, &p.RevokedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -213,20 +213,77 @@ func (s *AIPackageService) List(ctx context.Context) ([]models.AIPackage, error)
 	return out, rows.Err()
 }
 
+// RegisterExternal registers an AI package whose bytes live on an
+// external CDN (Bunny, R2, S3, etc). The backend never touches the
+// file — admin uploads to the CDN out-of-band, then provides the URL
+// + SHA256 + size + version. Agents pull from the CDN directly which
+// is why this path is much faster than serving 35MB through the VPS.
+func (s *AIPackageService) RegisterExternal(
+	ctx context.Context,
+	req models.RegisterExternalAIPackageRequest,
+	uploadedBy uuid.UUID,
+) (*models.AIPackage, error) {
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if req.SetActive {
+		if _, err := tx.Exec(ctx,
+			`UPDATE ai_packages SET is_active = FALSE WHERE is_active = TRUE`,
+		); err != nil {
+			return nil, fmt.Errorf("deactivate prior: %w", err)
+		}
+	}
+
+	sha := strings.ToLower(req.SHA256)
+
+	var pkg models.AIPackage
+	err = tx.QueryRow(ctx, `
+		INSERT INTO ai_packages (
+			filename, sha256, size_bytes, version_label, notes,
+			external_url, uploaded_by, is_active
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (sha256) DO UPDATE SET
+			version_label = EXCLUDED.version_label,
+			notes         = EXCLUDED.notes,
+			external_url  = EXCLUDED.external_url
+		RETURNING id, filename, sha256, size_bytes, version_label, notes,
+		          external_url, uploaded_by, uploaded_at, is_active, revoked_at
+	`, req.Filename, sha, req.SizeBytes, req.VersionLabel, req.Notes,
+		req.URL, uploadedBy, req.SetActive,
+	).Scan(
+		&pkg.ID, &pkg.Filename, &pkg.SHA256, &pkg.SizeBytes, &pkg.VersionLabel, &pkg.Notes,
+		&pkg.ExternalURL, &pkg.UploadedBy, &pkg.UploadedAt, &pkg.IsActive, &pkg.RevokedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("insert external ai_package: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &pkg, nil
+}
+
 // GetActiveForAgent returns the metadata an enrolled agent needs to
-// decide whether to update its local AI client copy.
+// decide whether to update its local AI client copy. When the active
+// package was registered with an external URL (CDN), agents fetch from
+// that URL — much faster than the VPS for 35MB+ binaries.
 func (s *AIPackageService) GetActiveForAgent(ctx context.Context) (*models.AgentAIPackageResponse, error) {
 	var (
 		sha          string
 		size         int64
 		versionLabel string
+		externalURL  *string
 	)
 	err := s.db.Pool.QueryRow(ctx, `
-		SELECT sha256, size_bytes, version_label
+		SELECT sha256, size_bytes, version_label, external_url
 		FROM ai_packages
 		WHERE is_active = TRUE AND revoked_at IS NULL
 		LIMIT 1
-	`).Scan(&sha, &size, &versionLabel)
+	`).Scan(&sha, &size, &versionLabel, &externalURL)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return &models.AgentAIPackageResponse{Available: false}, nil
 	}
@@ -234,12 +291,17 @@ func (s *AIPackageService) GetActiveForAgent(ctx context.Context) (*models.Agent
 		return nil, err
 	}
 
+	downloadURL := s.publicDownloadURL
+	if externalURL != nil && *externalURL != "" {
+		downloadURL = *externalURL
+	}
+
 	return &models.AgentAIPackageResponse{
 		Available:    true,
 		SHA256:       sha,
 		SizeBytes:    size,
 		VersionLabel: versionLabel,
-		DownloadURL:  s.publicDownloadURL,
+		DownloadURL:  downloadURL,
 	}, nil
 }
 

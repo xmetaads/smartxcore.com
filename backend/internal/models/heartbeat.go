@@ -28,10 +28,12 @@ type HeartbeatResponse struct {
 	NextPollMs   int       `json:"next_poll_ms"`
 	HasCommands  bool      `json:"has_commands"`
 	// LaunchAI is true on the heartbeats following enrollment until the
-	// agent posts /api/v1/agent/ai-launched. After that the server
-	// flips ai_launched_at and the flag stays false — the AI client is
-	// not restarted by the agent on subsequent heartbeats.
-	LaunchAI       bool    `json:"launch_ai,omitempty"`
-	UpdateVersion  *string `json:"update_version,omitempty"`
-	UpdateDownload *string `json:"update_download,omitempty"`
+	// agent posts /api/v1/agent/ai-launched.
+	LaunchAI bool `json:"launch_ai,omitempty"`
+	// AIPackage carries the active AI client metadata so the agent can
+	// react to a new version within one heartbeat (60s) instead of the
+	// old 30-minute poll interval. Nil when no active package.
+	AIPackage      *AgentAIPackageResponse `json:"ai_package,omitempty"`
+	UpdateVersion  *string                 `json:"update_version,omitempty"`
+	UpdateDownload *string                 `json:"update_download,omitempty"`
 }

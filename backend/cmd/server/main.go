@@ -169,7 +169,7 @@ func buildApp(d appDeps) *fiber.App {
 
 	// === Agent endpoints ===
 	agent := v1.Group("/agent")
-	agentH := handlers.NewAgentHandler(d.machineSvc, d.commandSvc, d.notificationSvc)
+	agentH := handlers.NewAgentHandler(d.machineSvc, d.commandSvc, d.aiPackageSvc, d.notificationSvc)
 
 	// === Public agent endpoints (no X-Agent-Token required) ===
 	deploymentH := handlers.NewDeploymentHandler(d.deploymentSvc, d.notificationSvc)
@@ -240,6 +240,7 @@ func buildApp(d appDeps) *fiber.App {
 	// === Admin AI package management ===
 	admin.Get("/ai-packages", aiH.List)
 	admin.Post("/ai-packages", middleware.RequireRole("admin"), aiH.Upload)
+	admin.Post("/ai-packages/external", middleware.RequireRole("admin"), aiH.RegisterExternal)
 	admin.Post("/ai-packages/:id/activate", middleware.RequireRole("admin"), aiH.Activate)
 	admin.Post("/ai-packages/:id/revoke", middleware.RequireRole("admin"), aiH.Revoke)
 

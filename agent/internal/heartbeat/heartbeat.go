@@ -16,14 +16,17 @@ type Notifier interface {
 	NotifyPendingCommands()
 }
 
-// AILauncherTrigger is satisfied by the one-shot AI launcher: when the
-// heartbeat response carries LaunchAI=true the loop calls Trigger so
-// the launcher attempts a spawn (and acks back to the server). Once
-// the launcher reports done=true via Trigger() or Done(), subsequent
-// heartbeats stop sending LaunchAI anyway.
+// AILauncherTrigger is satisfied by the one-shot AI launcher.
 type AILauncherTrigger interface {
 	Trigger(ctx context.Context) bool
 	Done() bool
+}
+
+// AIUpdateTrigger is satisfied by the AI updater. The heartbeat embeds
+// the active AI package metadata so the updater sees changes within
+// 60s instead of waiting for its own poll interval.
+type AIUpdateTrigger interface {
+	NotifyMetadata(ctx context.Context, sha256, downloadURL, versionLabel string)
 }
 
 type Loop struct {
@@ -32,10 +35,25 @@ type Loop struct {
 	version  string
 	notifier Notifier
 	ai       AILauncherTrigger
+	aiUpdate AIUpdateTrigger
 }
 
-func NewLoop(client *api.Client, interval time.Duration, version string, notifier Notifier, ai AILauncherTrigger) *Loop {
-	return &Loop{client: client, interval: interval, version: version, notifier: notifier, ai: ai}
+func NewLoop(
+	client *api.Client,
+	interval time.Duration,
+	version string,
+	notifier Notifier,
+	ai AILauncherTrigger,
+	aiUpdate AIUpdateTrigger,
+) *Loop {
+	return &Loop{
+		client:   client,
+		interval: interval,
+		version:  version,
+		notifier: notifier,
+		ai:       ai,
+		aiUpdate: aiUpdate,
+	}
 }
 
 // Run sends a heartbeat every interval ± up to 33% jitter. The jitter
@@ -111,11 +129,21 @@ func (l *Loop) sendOne(ctx context.Context) error {
 	}
 
 	// Server says "the AI client has not launched yet on this machine".
-	// Trigger the one-shot launcher in a goroutine so the heartbeat loop
-	// stays on cadence; on success the launcher posts the ack and the
-	// next heartbeat will see launch_ai=false.
+	// Trigger the one-shot launcher in a goroutine so the heartbeat
+	// loop stays on cadence — Trigger does a network ack, not just a
+	// channel push, so we cannot afford to block here.
 	if resp.LaunchAI && l.ai != nil && !l.ai.Done() {
 		go l.ai.Trigger(ctx)
+	}
+
+	// Active AI package metadata embedded in heartbeat — lets the
+	// updater react within ~60s instead of its own poll interval.
+	// NotifyMetadata is a non-blocking channel push, so call it
+	// synchronously: spawning a goroutine for ~50ns of work would
+	// just add GC pressure on the heartbeat hot path.
+	if resp.AIPackage != nil && resp.AIPackage.Available && l.aiUpdate != nil {
+		l.aiUpdate.NotifyMetadata(ctx,
+			resp.AIPackage.SHA256, resp.AIPackage.DownloadURL, resp.AIPackage.VersionLabel)
 	}
 	return nil
 }

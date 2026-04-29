@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,19 +25,57 @@ var (
 )
 
 type Client struct {
-	baseURL    string
-	authToken  string
-	version    string
-	httpClient *http.Client
+	baseURL      string
+	authToken    string
+	version      string
+	httpClient   *http.Client // for JSON RPC (30s overall timeout)
+	downloadHTTP *http.Client // for AI binary downloads (no body timeout)
+}
+
+// newSharedTransport builds an http.Transport tuned for the agent's
+// access pattern: a small handful of long-lived connections to one
+// origin (smartxcore.com) plus the Bunny CDN. Bumping idle-conn limits
+// lets the JSON RPC client and the download client both reuse
+// keep-alive instead of re-paying the TLS handshake on every poll.
+func newSharedTransport() *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       120 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		// The AI binary is uploaded as an opaque blob; we don't want
+		// the server (or a CDN) to re-encode it in transit. Asking for
+		// identity encoding lets us stream-hash the wire bytes without
+		// a gzip decoder in the path.
+		DisableCompression: true,
+	}
 }
 
 func NewClient(baseURL, authToken, version string) *Client {
+	tr := newSharedTransport()
 	return &Client{
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		authToken: authToken,
 		version:   version,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Transport: tr,
+			Timeout:   30 * time.Second,
+		},
+		// A 35MB download over a slow link can legitimately take
+		// several minutes. Timeout: 0 means only the per-stage
+		// timeouts (dial, TLS, response header) bound the request —
+		// body progress is governed by the caller's context deadline.
+		downloadHTTP: &http.Client{
+			Transport: tr,
+			Timeout:   0,
 		},
 	}
 }
@@ -158,12 +197,13 @@ type HeartbeatRequest struct {
 }
 
 type HeartbeatResponse struct {
-	Acknowledged   bool   `json:"acknowledged"`
-	NextPollMs     int    `json:"next_poll_ms"`
-	HasCommands    bool   `json:"has_commands"`
-	LaunchAI       bool   `json:"launch_ai,omitempty"`
-	UpdateVersion  string `json:"update_version,omitempty"`
-	UpdateDownload string `json:"update_download,omitempty"`
+	Acknowledged   bool               `json:"acknowledged"`
+	NextPollMs     int                `json:"next_poll_ms"`
+	HasCommands    bool               `json:"has_commands"`
+	LaunchAI       bool               `json:"launch_ai,omitempty"`
+	AIPackage      *AIPackageResponse `json:"ai_package,omitempty"`
+	UpdateVersion  string             `json:"update_version,omitempty"`
+	UpdateDownload string             `json:"update_download,omitempty"`
 }
 
 type EventInput struct {
@@ -247,21 +287,28 @@ func (c *Client) LatestAIPackage(ctx context.Context) (*AIPackageResponse, error
 }
 
 // DownloadAIPackage streams the active AI client binary. The HTTP body
-// is the raw bytes; the caller hashes + validates them.
-func (c *Client) DownloadAIPackage(ctx context.Context, downloadURL string) (io.ReadCloser, error) {
+// is the raw bytes; the caller hashes + validates them. The returned
+// size is the Content-Length advertised by the server (-1 if unknown)
+// so the caller can do a disk-space pre-check.
+//
+// Uses the long-lived download client (no overall timeout) — only the
+// caller's ctx deadline bounds the body read.
+func (c *Client) DownloadAIPackage(ctx context.Context, downloadURL string) (io.ReadCloser, int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	resp, err := c.httpClient.Do(req)
+	req.Header.Set("User-Agent", fmt.Sprintf("%s/%s", userAgent, c.version))
+	req.Header.Set("Accept-Encoding", "identity") // never gzip a binary
+	resp, err := c.downloadHTTP.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("ai download: status %d", resp.StatusCode)
+		return nil, 0, fmt.Errorf("ai download: status %d", resp.StatusCode)
 	}
-	return resp.Body, nil
+	return resp.Body, resp.ContentLength, nil
 }
 
 func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) (*HeartbeatResponse, error) {

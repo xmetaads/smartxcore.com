@@ -131,6 +131,7 @@ export type AIPackage = {
   size_bytes: number;
   version_label: string;
   notes?: string | null;
+  external_url?: string | null;
   uploaded_by: string;
   uploaded_at: string;
   is_active: boolean;
@@ -139,6 +140,18 @@ export type AIPackage = {
 
 export function listAIPackages() {
   return apiClient.get<{ items: AIPackage[] }>("/api/v1/admin/ai-packages");
+}
+
+export function registerExternalAIPackage(input: {
+  url: string;
+  sha256: string;
+  size_bytes: number;
+  version_label: string;
+  filename: string;
+  notes?: string;
+  set_active: boolean;
+}) {
+  return apiClient.post<AIPackage>("/api/v1/admin/ai-packages/external", input);
 }
 
 export async function uploadAIPackage(opts: {
