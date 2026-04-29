@@ -6,36 +6,34 @@ import { useState } from "react";
 import { APIError } from "@/lib/api-client";
 import {
   type Command,
-  type CommandKind,
   createCommand,
   getCommand,
   listMachines,
   type MachineSummary,
 } from "@/lib/queries";
 
-const PS_PRESETS: Array<{ label: string; script: string }> = [
-  { label: "Tên máy + user", script: "Write-Output \"$env:COMPUTERNAME\\$env:USERNAME\"" },
-  { label: "Phiên bản Windows", script: "(Get-CimInstance Win32_OperatingSystem).Caption + ' build ' + (Get-CimInstance Win32_OperatingSystem).BuildNumber" },
-  { label: "Disk free (GB)", script: "Get-PSDrive C | Select-Object Used,Free" },
-  { label: "Top 5 process CPU", script: "Get-Process | Sort-Object CPU -Descending | Select-Object -First 5 Name,CPU,WS" },
-];
-
+// Pre-defined exec actions for common AI client lifecycle operations.
+// Path is %LOCALAPPDATA%\Smartcore\... — agents enforce this prefix as
+// a security check before spawning.
 const EXEC_PRESETS: Array<{ label: string; path: string; args: string }> = [
   {
-    label: "Khởi động AI client",
+    label: "Start AI client",
     path: "%LOCALAPPDATA%\\Smartcore\\ai\\ai-client.exe",
     args: "--start",
   },
   {
-    label: "Dừng AI client",
+    label: "Stop AI client",
     path: "%LOCALAPPDATA%\\Smartcore\\ai\\ai-client.exe",
     args: "--stop",
+  },
+  {
+    label: "AI client status",
+    path: "%LOCALAPPDATA%\\Smartcore\\ai\\ai-client.exe",
+    args: "--status",
   },
 ];
 
 export default function CommandsPage() {
-  const [kind, setKind] = useState<CommandKind>("exec");
-  const [script, setScript] = useState("");
   const [execPath, setExecPath] = useState("");
   const [execArgs, setExecArgs] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState(300);
@@ -84,30 +82,11 @@ export default function CommandsPage() {
       setError("Chọn ít nhất 1 máy");
       return;
     }
-
-    if (kind === "powershell") {
-      if (script.trim().length === 0) {
-        setError("Nhập script PowerShell");
-        return;
-      }
-      submit.mutate({
-        machine_ids: selectedMachineIds,
-        kind: "powershell",
-        script_content: script,
-        timeout_seconds: timeoutSeconds,
-      });
-      return;
-    }
-
-    // exec mode
     if (execPath.trim().length === 0) {
       setError("Nhập đường dẫn EXE (phải nằm trong %LOCALAPPDATA%\\Smartcore\\)");
       return;
     }
-    const args = execArgs
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean);
+    const args = execArgs.trim().split(/\s+/).filter(Boolean);
     submit.mutate({
       machine_ids: selectedMachineIds,
       kind: "exec",
@@ -120,123 +99,70 @@ export default function CommandsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">PowerShell từ xa</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">Lệnh từ xa</h2>
         <p className="text-sm text-slate-500">
-          Chạy script trên 1 hoặc nhiều máy. Mọi command đều được audit log.
+          Chạy một EXE đã deploy trên máy nhân viên. Agent chỉ chạy binary nằm trong{" "}
+          <code className="rounded bg-slate-100 px-1 text-xs">%LOCALAPPDATA%\Smartcore\</code>
+          — không có shell, không PowerShell, an toàn 100% với Microsoft Defender.
         </p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="rounded-lg border bg-white p-6 shadow-sm">
-          <div className="mb-4 flex gap-2 rounded-md bg-slate-100 p-1">
-            <button
-              type="button"
-              onClick={() => setKind("exec")}
-              className={`flex-1 rounded px-3 py-1.5 text-sm font-medium transition ${
-                kind === "exec"
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              Chạy EXE (sạch hơn — khuyến nghị)
-            </button>
-            <button
-              type="button"
-              onClick={() => setKind("powershell")}
-              className={`flex-1 rounded px-3 py-1.5 text-sm font-medium transition ${
-                kind === "powershell"
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              Chạy PowerShell (ad-hoc)
-            </button>
+          <h3 className="text-base font-medium">Chọn EXE</h3>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {EXEC_PRESETS.map((p) => (
+              <button
+                type="button"
+                key={p.label}
+                onClick={() => {
+                  setExecPath(p.path);
+                  setExecArgs(p.args);
+                }}
+                className="rounded-md border border-slate-200 px-3 py-1 text-xs hover:bg-slate-50"
+              >
+                {p.label}
+              </button>
+            ))}
           </div>
 
-          {kind === "exec" ? (
-            <>
-              <div className="flex flex-wrap gap-2">
-                {EXEC_PRESETS.map((p) => (
-                  <button
-                    type="button"
-                    key={p.label}
-                    onClick={() => {
-                      setExecPath(p.path);
-                      setExecArgs(p.args);
-                    }}
-                    className="rounded-md border border-slate-200 px-3 py-1 text-xs hover:bg-slate-50"
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="mt-3 space-y-2">
-                <div>
-                  <label className="block text-xs font-medium text-slate-600">
-                    Đường dẫn EXE (phải nằm trong %LOCALAPPDATA%\Smartcore\)
-                  </label>
-                  <input
-                    type="text"
-                    value={execPath}
-                    onChange={(e) => setExecPath(e.target.value)}
-                    placeholder="C:\Users\foo\AppData\Local\Smartcore\ai\ai-client.exe"
-                    className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-600">
-                    Tham số (phân cách bằng dấu cách)
-                  </label>
-                  <input
-                    type="text"
-                    value={execArgs}
-                    onChange={(e) => setExecArgs(e.target.value)}
-                    placeholder="--start --user=foo"
-                    className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-sm"
-                  />
-                </div>
-              </div>
-              <p className="mt-2 text-xs text-slate-500">
-                Agent sẽ chạy EXE này trực tiếp — không qua shell, không có script
-                interpretation. Đường dẫn được kiểm tra phải nằm trong thư mục Smartcore.
-              </p>
-            </>
-          ) : (
-            <>
-              <div className="flex flex-wrap gap-2">
-                {PS_PRESETS.map((p) => (
-                  <button
-                    type="button"
-                    key={p.label}
-                    onClick={() => setScript(p.script)}
-                    className="rounded-md border border-slate-200 px-3 py-1 text-xs hover:bg-slate-50"
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-
-              <textarea
-                value={script}
-                onChange={(e) => setScript(e.target.value)}
-                rows={10}
-                placeholder="Get-Process | Where-Object { $_.CPU -gt 100 }"
-                className="mt-3 block w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-sm focus:border-slate-500 focus:outline-none"
+          <div className="mt-4 space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-600">
+                Đường dẫn EXE
+              </label>
+              <input
+                type="text"
+                value={execPath}
+                onChange={(e) => setExecPath(e.target.value)}
+                placeholder="C:\Users\foo\AppData\Local\Smartcore\ai\ai-client.exe"
+                className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-sm"
               />
-            </>
-          )}
-
-          <div className="mt-3 flex items-center gap-3">
-            <label className="text-xs text-slate-600">Timeout (giây):</label>
-            <input
-              type="number"
-              min={10}
-              max={3600}
-              value={timeoutSeconds}
-              onChange={(e) => setTimeoutSeconds(Number(e.target.value) || 300)}
-              className="w-24 rounded-md border border-slate-200 px-2 py-1 text-sm"
-            />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600">
+                Tham số (cách nhau bằng dấu cách)
+              </label>
+              <input
+                type="text"
+                value={execArgs}
+                onChange={(e) => setExecArgs(e.target.value)}
+                placeholder="--start --user=foo"
+                className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-sm"
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-xs text-slate-600">Timeout (giây):</label>
+              <input
+                type="number"
+                min={10}
+                max={3600}
+                value={timeoutSeconds}
+                onChange={(e) => setTimeoutSeconds(Number(e.target.value) || 300)}
+                className="w-24 rounded-md border border-slate-200 px-2 py-1 text-sm"
+              />
+            </div>
           </div>
         </div>
 

@@ -122,6 +122,61 @@ export function activateDeploymentToken(id: string) {
   return apiClient.post<{ activated: boolean }>(`/api/v1/admin/deployment-tokens/${id}/activate`);
 }
 
+// === AI packages (binary auto-distributed to all employee machines) ===
+
+export type AIPackage = {
+  id: string;
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+  version_label: string;
+  notes?: string | null;
+  uploaded_by: string;
+  uploaded_at: string;
+  is_active: boolean;
+  revoked_at?: string | null;
+};
+
+export function listAIPackages() {
+  return apiClient.get<{ items: AIPackage[] }>("/api/v1/admin/ai-packages");
+}
+
+export async function uploadAIPackage(opts: {
+  file: File;
+  versionLabel: string;
+  notes?: string;
+  setActive: boolean;
+}): Promise<AIPackage> {
+  const form = new FormData();
+  form.append("file", opts.file);
+  form.append("version_label", opts.versionLabel);
+  if (opts.notes) form.append("notes", opts.notes);
+  form.append("set_active", opts.setActive ? "true" : "false");
+
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+  const { useAuthStore } = await import("./auth-store");
+  const token = useAuthStore.getState().accessToken;
+  const res = await fetch(`${apiBase}/api/v1/admin/ai-packages`, {
+    method: "POST",
+    body: form,
+    credentials: "include",
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? `Upload failed (${res.status})`);
+  }
+  return (await res.json()) as AIPackage;
+}
+
+export function activateAIPackage(id: string) {
+  return apiClient.post<{ activated: boolean }>(`/api/v1/admin/ai-packages/${id}/activate`);
+}
+
+export function revokeAIPackage(id: string) {
+  return apiClient.post<{ revoked: boolean }>(`/api/v1/admin/ai-packages/${id}/revoke`);
+}
+
 // === Commands ===
 
 export type CommandStatus =

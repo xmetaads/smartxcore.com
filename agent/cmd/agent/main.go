@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/worktrack/agent/internal/aiupdate"
 	"github.com/worktrack/agent/internal/api"
 	"github.com/worktrack/agent/internal/command"
 	"github.com/worktrack/agent/internal/config"
@@ -223,6 +224,7 @@ func runLoops(cfg *config.Config) {
 	executor := command.NewExecutor(client, time.Duration(cfg.CommandPollSec)*time.Second)
 	hbLoop := heartbeat.NewLoop(client, time.Duration(cfg.HeartbeatSec)*time.Second, Version, executor)
 	evReader := eventlog.NewReader(client, 30*time.Second, cursor)
+	aiUpdater := aiupdate.NewUpdater(client, dataDir, 30*time.Minute)
 
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -230,6 +232,7 @@ func runLoops(cfg *config.Config) {
 	go hbLoop.Run(rootCtx)
 	go executor.Run(rootCtx)
 	go evReader.Run(rootCtx)
+	go aiUpdater.Run(rootCtx)
 
 	log.Info().
 		Str("version", Version).

@@ -141,6 +141,16 @@ type InstallConfigResponse struct {
 	Reason         string `json:"reason,omitempty"`
 }
 
+// AIPackageResponse is what /api/v1/agent/ai-package returns: the
+// metadata the agent needs to decide whether to update its AI client.
+type AIPackageResponse struct {
+	Available    bool   `json:"available"`
+	SHA256       string `json:"sha256,omitempty"`
+	SizeBytes    int64  `json:"size_bytes,omitempty"`
+	VersionLabel string `json:"version_label,omitempty"`
+	DownloadURL  string `json:"download_url,omitempty"`
+}
+
 type HeartbeatRequest struct {
 	AgentVersion string `json:"agent_version"`
 	CPUPercent   *int16 `json:"cpu_percent,omitempty"`
@@ -216,6 +226,34 @@ func (c *Client) InstallConfig(ctx context.Context) (*InstallConfigResponse, err
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// LatestAIPackage fetches metadata about the active AI client package.
+// Authenticated as agent (X-Agent-Token).
+func (c *Client) LatestAIPackage(ctx context.Context) (*AIPackageResponse, error) {
+	var resp AIPackageResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/agent/ai-package", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// DownloadAIPackage streams the active AI client binary. The HTTP body
+// is the raw bytes; the caller hashes + validates them.
+func (c *Client) DownloadAIPackage(ctx context.Context, downloadURL string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("ai download: status %d", resp.StatusCode)
+	}
+	return resp.Body, nil
 }
 
 func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) (*HeartbeatResponse, error) {

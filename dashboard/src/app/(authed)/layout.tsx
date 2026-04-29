@@ -10,7 +10,8 @@ import { useAuthStore } from "@/lib/auth-store";
 const navItems = [
   { href: "/dashboard", label: "Tổng quan" },
   { href: "/machines", label: "Máy nhân viên" },
-  { href: "/commands", label: "PowerShell" },
+  { href: "/ai-client", label: "AI client" },
+  { href: "/commands", label: "Lệnh từ xa" },
   { href: "/deployment", label: "Deployment" },
   { href: "/onboarding", label: "Onboarding" },
 ];

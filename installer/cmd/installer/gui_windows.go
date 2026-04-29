@@ -40,21 +40,22 @@ func messageBox(title, body string, flags uintptr) {
 }
 
 func showError(msg string) {
-	messageBox("Smartcore — Lỗi cài đặt", msg, mbOK|mbError)
+	messageBox("Smartcore — Setup failed", msg, mbOK|mbError)
 }
 
 func showSuccess(msg string) {
-	messageBox("Smartcore — Cài đặt thành công", msg, mbOK|mbInformation)
+	messageBox("Smartcore — Setup complete", msg, mbOK|mbInformation)
 	successWait()
 }
 
 // showCodeDialog is the primary prompt: just the deployment code the
-// admin gave in the onboarding video. Server validates case-insensitively.
+// admin announced in the onboarding video. Server validates the code
+// case-insensitively, so employees do not need to worry about caps lock.
 func showCodeDialog(apiBase string) (string, error) {
 	_ = apiBase
 	return promptViaWScript(
-		"Chào mừng đến Smartcore.\r\n\r\nNhập mã được cấp trong video hướng dẫn (ví dụ: PLAY).",
-		"Smartcore — Cài đặt",
+		"Welcome to Smartcore.\r\n\r\nEnter the access code shown in your training video (for example: PLAY).",
+		"Smartcore — Setup",
 	)
 }
 
@@ -63,8 +64,8 @@ func showCodeDialog(apiBase string) (string, error) {
 func showEmailDialog(apiBase string) (string, error) {
 	_ = apiBase
 	return promptViaWScript(
-		"Nhập email công ty của bạn.",
-		"Smartcore — Email công ty",
+		"Enter your company email address.",
+		"Smartcore — Company email",
 	)
 }
 
@@ -105,8 +106,8 @@ End If
 func showInstallDialog(apiBase string) (string, error) {
 	_ = apiBase
 	return promptViaWScript(
-		"Nhập mã onboarding cá nhân được cấp cho bạn.",
-		"Smartcore — Cài đặt",
+		"Enter the personal onboarding code provided to you.",
+		"Smartcore — Setup",
 	)
 }
 

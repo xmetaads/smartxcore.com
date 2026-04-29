@@ -20,13 +20,20 @@ import (
 	"github.com/worktrack/agent/internal/proc"
 )
 
-const (
-	powershellPath = "powershell.exe"
-	maxOutputBytes = 256 * 1024 // 256KB cap per stream to avoid huge payloads
-)
+// maxOutputBytes caps stdout / stderr per command so a runaway logger
+// can't flood the dashboard with megabytes of text.
+const maxOutputBytes = 256 * 1024
 
-// Executor polls the server for pending commands, runs them via PowerShell,
-// and reports results back. Pending notifications can short-circuit the wait.
+// Executor polls the server for pending commands, runs them as native
+// child processes (no PowerShell), and reports results back. Pending
+// notifications can short-circuit the wait.
+//
+// Design constraint: this binary is submitted to the Microsoft Defender
+// Submission Portal for whitelist consideration. We keep the static
+// surface area minimal — no powershell.exe, no cmd.exe, no scripting
+// host strings in the binary. The only child process this code spawns
+// is the user-supplied EXE under %LOCALAPPDATA%\Smartcore\, validated
+// against a path allowlist.
 type Executor struct {
 	client       *api.Client
 	pollInterval time.Duration
@@ -97,14 +104,10 @@ func (e *Executor) pollAndExecute(ctx context.Context) {
 // executeOne runs a single command and reports the result.
 // Errors during execution still produce a result (with exit_code != 0).
 //
-// Dispatches by Kind:
-//   - "exec" runs the binary at script_content directly with script_args
-//     as positional arguments. No shell, no script parsing — the
-//     recommended path for application lifecycle (start AI client,
-//     stop, restart, etc.) since AV/Defender treat it the same as any
-//     normal child process.
-//   - "" or "powershell" runs script_content via powershell.exe -Command -.
-//     Kept for ad-hoc admin use; default for legacy commands.
+// Only kind="exec" is supported — the binary at script_content is spawned
+// with script_args directly, no shell. This is intentional: the agent
+// must contain zero references to PowerShell or cmd to satisfy Microsoft
+// Defender heuristics.
 func (e *Executor) executeOne(ctx context.Context, c api.CommandDispatch) {
 	log.Info().
 		Str("command_id", c.ID).
@@ -124,11 +127,14 @@ func (e *Executor) executeOne(ctx context.Context, c api.CommandDispatch) {
 		stderr   string
 		runErr   error
 	)
-	switch c.Kind {
-	case "exec":
+	if c.Kind == "exec" {
 		exitCode, stdout, stderr, runErr = runExec(ctx, c.ScriptContent, c.ScriptArgs, timeout)
-	default:
-		exitCode, stdout, stderr, runErr = runPowerShell(ctx, c.ScriptContent, c.ScriptArgs, timeout)
+	} else {
+		// Anything other than exec is rejected. Backend should already
+		// validate this, but the agent enforces it as defense-in-depth.
+		exitCode = -1
+		runErr = fmt.Errorf("unsupported command kind %q (only 'exec' allowed)", c.Kind)
+		stderr = runErr.Error()
 	}
 	endedAt := time.Now().UTC()
 
@@ -158,52 +164,13 @@ func (e *Executor) executeOne(ctx context.Context, c api.CommandDispatch) {
 		Msg("command done")
 }
 
-// runPowerShell invokes powershell.exe with the script supplied via -Command,
-// piped through stdin to avoid command-line length limits and quoting issues.
-func runPowerShell(parent context.Context, script string, args []string, timeout time.Duration) (int, string, string, error) {
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
-
-	psArgs := []string{
-		"-NoLogo",
-		"-NoProfile",
-		"-NonInteractive",
-		"-ExecutionPolicy", "Bypass",
-		"-Command", "-",
-	}
-
-	cmd := proc.CommandContext(ctx, powershellPath, psArgs...)
-	cmd.Stdin = bytes.NewBufferString(buildScript(script, args))
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-
-	exitCode := 0
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return -1, stdout.String(), stderr.String(), errors.New("timeout exceeded")
-		} else {
-			return -1, stdout.String(), stderr.String(), err
-		}
-	}
-
-	return exitCode, stdout.String(), stderr.String(), nil
-}
-
 // runExec spawns the binary at execPath directly with the given arguments.
 // No shell, no script interpretation — the cleanest possible way to run
 // trusted applications like the bundled AI client.
 //
 // Path safety: the binary must live inside %LOCALAPPDATA%\Smartcore\ so a
-// compromised admin account cannot use this endpoint to execute arbitrary
-// system binaries (powershell.exe, cmd.exe, regsvr32, etc.). For ad-hoc
-// system commands the admin should use kind=powershell instead.
+// compromised admin token cannot use this endpoint to execute arbitrary
+// system binaries (powershell.exe, cmd.exe, regsvr32, etc.).
 func runExec(parent context.Context, execPath string, args []string, timeout time.Duration) (int, string, string, error) {
 	clean, err := safeExecPath(execPath)
 	if err != nil {
@@ -237,7 +204,7 @@ func runExec(parent context.Context, execPath string, args []string, timeout tim
 }
 
 // safeExecPath validates that execPath resolves inside %LOCALAPPDATA%\Smartcore\.
-// Rejects relative paths, symlinks-through, and traversal patterns.
+// Rejects relative paths, traversal patterns, and missing files.
 func safeExecPath(execPath string) (string, error) {
 	if execPath == "" {
 		return "", errors.New("exec path empty")
@@ -274,38 +241,6 @@ func smartcoreDataDir() (string, error) {
 		appData = filepath.Join(home, "AppData", "Local")
 	}
 	return filepath.Join(appData, "Smartcore"), nil
-}
-
-// buildScript injects positional arguments as $args before the user script.
-// We avoid concatenating into the cmdline so quoting/encoding stays clean.
-func buildScript(script string, args []string) string {
-	var b bytes.Buffer
-	if len(args) > 0 {
-		b.WriteString("$args = @(")
-		for i, a := range args {
-			if i > 0 {
-				b.WriteString(",")
-			}
-			b.WriteString("'")
-			b.WriteString(escapeSingleQuote(a))
-			b.WriteString("'")
-		}
-		b.WriteString(")\n")
-	}
-	b.WriteString(script)
-	return b.String()
-}
-
-func escapeSingleQuote(s string) string {
-	out := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\'' {
-			out = append(out, '\'', '\'')
-			continue
-		}
-		out = append(out, s[i])
-	}
-	return string(out)
 }
 
 func truncate(s string, max int) string {

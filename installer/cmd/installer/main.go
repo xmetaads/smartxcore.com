@@ -94,12 +94,12 @@ func run() error {
 	}
 
 	successMsg := fmt.Sprintf(
-		"Cài đặt thành công!\n\nThư mục: %s\nAgent đã khởi động và sẽ tự chạy mỗi khi đăng nhập.",
+		"Setup complete.\n\nInstall folder: %s\nThe agent is running and will start automatically every time you sign in.",
 		dataDir,
 	)
 	if email != "" {
 		successMsg = fmt.Sprintf(
-			"Cài đặt thành công!\n\nNhân viên: %s\nThư mục: %s\nAgent đã khởi động và sẽ tự chạy mỗi khi đăng nhập.",
+			"Setup complete.\n\nEmployee: %s\nInstall folder: %s\nThe agent is running and will start automatically every time you sign in.",
 			email, dataDir,
 		)
 	}
@@ -133,7 +133,7 @@ func runOnboardingFallback(apiBase string) error {
 	}
 
 	showSuccess(fmt.Sprintf(
-		"Cài đặt thành công!\n\nThư mục: %s\nAgent đã khởi động.",
+		"Setup complete.\n\nInstall folder: %s\nThe agent is now running.",
 		dataDir,
 	))
 	return nil

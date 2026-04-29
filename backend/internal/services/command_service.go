@@ -38,10 +38,10 @@ func (s *CommandService) CreateCommands(
 
 	kind := req.Kind
 	if kind == "" {
-		kind = models.CommandKindPowerShell
+		kind = models.CommandKindExec
 	}
 	if !kind.Valid() {
-		return nil, fmt.Errorf("invalid command kind %q", kind)
+		return nil, fmt.Errorf("invalid command kind %q (only 'exec' supported)", kind)
 	}
 
 	ids := make([]uuid.UUID, 0, len(req.MachineIDs))

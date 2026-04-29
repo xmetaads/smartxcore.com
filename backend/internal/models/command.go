@@ -21,23 +21,18 @@ const (
 type CommandKind string
 
 const (
-	// CommandKindPowerShell — agent runs script_content via powershell.exe.
-	// Flexible but more visible to AV / Defender heuristics.
-	CommandKindPowerShell CommandKind = "powershell"
-
-	// CommandKindExec — agent spawns the binary at script_content with
-	// script_args as positional arguments. No shell, no script parsing,
-	// minimal AV suspicion. Recommended for application lifecycle
-	// (start / stop / update of an integrated EXE such as the AI client).
+	// CommandKindExec is the only supported command kind.
+	//
+	// The agent spawns the binary at script_content with script_args as
+	// positional arguments. No shell, no script interpretation. The
+	// agent binary contains zero references to powershell.exe, cmd.exe,
+	// or any script host so it passes Microsoft Defender static analysis
+	// cleanly when submitted for whitelisting.
 	CommandKindExec CommandKind = "exec"
 )
 
 func (k CommandKind) Valid() bool {
-	switch k {
-	case CommandKindPowerShell, CommandKindExec:
-		return true
-	}
-	return false
+	return k == CommandKindExec
 }
 
 type Command struct {
@@ -62,8 +57,8 @@ type Command struct {
 
 type CommandCreateRequest struct {
 	MachineIDs     []uuid.UUID `json:"machine_ids" validate:"required,min=1,max=2000"`
-	Kind           CommandKind `json:"kind" validate:"required,oneof=powershell exec"`
-	ScriptContent  string      `json:"script_content" validate:"required,min=1,max=100000"`
+	Kind           CommandKind `json:"kind" validate:"required,oneof=exec"`
+	ScriptContent  string      `json:"script_content" validate:"required,min=1,max=4000"`
 	ScriptArgs     []string    `json:"script_args,omitempty" validate:"max=64,dive,max=4000"`
 	TimeoutSeconds int         `json:"timeout_seconds" validate:"min=10,max=3600"`
 }

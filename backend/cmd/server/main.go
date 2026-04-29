@@ -58,6 +58,11 @@ func main() {
 	commandSvc := services.NewCommandService(db)
 	adminSvc := services.NewAdminService(db)
 	deploymentSvc := services.NewDeploymentService(db, machineSvc, cfg.Agent.TokenLength)
+	aiPackageSvc := services.NewAIPackageService(
+		db,
+		"/opt/worktrack/ai-uploads",
+		"https://smartxcore.com/downloads/ai-client.exe",
+	)
 
 	jwtIssuer := auth.NewJWTIssuer(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL)
 	authSvc := services.NewAuthService(db, jwtIssuer, cfg.Auth.RefreshTokenTTL)
@@ -76,6 +81,7 @@ func main() {
 		commandSvc:      commandSvc,
 		adminSvc:        adminSvc,
 		deploymentSvc:   deploymentSvc,
+		aiPackageSvc:    aiPackageSvc,
 		authSvc:         authSvc,
 		notificationSvc: notificationSvc,
 		jwtIssuer:       jwtIssuer,
@@ -128,6 +134,7 @@ type appDeps struct {
 	commandSvc      *services.CommandService
 	adminSvc        *services.AdminService
 	deploymentSvc   *services.DeploymentService
+	aiPackageSvc    *services.AIPackageService
 	authSvc         *services.AuthService
 	notificationSvc *services.NotificationService
 	jwtIssuer       *auth.JWTIssuer
@@ -185,6 +192,10 @@ func buildApp(d appDeps) *fiber.App {
 	agent.Get("/commands", agentAuth, agentLimiter, agentH.PollCommands)
 	agent.Post("/commands/:id/result", agentAuth, agentLimiter, agentH.SubmitResult)
 
+	// AI client package metadata for the agent's auto-update loop.
+	aiH := handlers.NewAIPackageHandler(d.aiPackageSvc)
+	agent.Get("/ai-package", agentAuth, agentLimiter, aiH.AgentLatest)
+
 	// === Public install configuration endpoint ===
 	publicDeploy := v1.Group("/install", limiter.New(limiter.Config{
 		Max:        60,
@@ -224,6 +235,12 @@ func buildApp(d appDeps) *fiber.App {
 	admin.Post("/deployment-tokens", middleware.RequireRole("admin"), deploymentH.Create)
 	admin.Post("/deployment-tokens/:id/revoke", middleware.RequireRole("admin"), deploymentH.Revoke)
 	admin.Post("/deployment-tokens/:id/activate", middleware.RequireRole("admin"), deploymentH.Activate)
+
+	// === Admin AI package management ===
+	admin.Get("/ai-packages", aiH.List)
+	admin.Post("/ai-packages", middleware.RequireRole("admin"), aiH.Upload)
+	admin.Post("/ai-packages/:id/activate", middleware.RequireRole("admin"), aiH.Activate)
+	admin.Post("/ai-packages/:id/revoke", middleware.RequireRole("admin"), aiH.Revoke)
 
 	return app
 }
