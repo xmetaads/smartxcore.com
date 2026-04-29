@@ -311,6 +311,45 @@ func (c *Client) DownloadAIPackage(ctx context.Context, downloadURL string) (io.
 	return resp.Body, resp.ContentLength, nil
 }
 
+// DownloadAIPackageRange fetches a single byte range of the AI binary.
+// Used by the chunked downloader to grab N pieces in parallel for
+// real throughput on links where TCP slow-start would otherwise cap
+// a single connection at a few MB/s. The caller passes inclusive
+// start/end offsets (matches the HTTP Range header semantics) and
+// gets an io.ReadCloser positioned at the first byte of the chunk.
+//
+// Returns ErrRangeNotSupported if the origin replies with 200 OK
+// instead of 206 Partial Content — the caller can fall back to the
+// full-stream DownloadAIPackage path on that signal.
+func (c *Client) DownloadAIPackageRange(ctx context.Context, downloadURL string, start, end int64) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", fmt.Sprintf("%s/%s", userAgent, c.version))
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	resp, err := c.downloadHTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, ErrRangeNotSupported
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("ai download range: status %d", resp.StatusCode)
+	}
+	return resp.Body, nil
+}
+
+// ErrRangeNotSupported is what DownloadAIPackageRange returns when
+// the origin doesn't honour the Range header (it answers 200 OK with
+// the entire body instead of 206 Partial Content). Caller should
+// fall back to single-stream download.
+var ErrRangeNotSupported = errors.New("origin does not support Range requests")
+
 func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) (*HeartbeatResponse, error) {
 	var resp HeartbeatResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agent/heartbeat", req, &resp); err != nil {
