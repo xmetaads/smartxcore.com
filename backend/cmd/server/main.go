@@ -25,6 +25,7 @@ import (
 	"github.com/worktrack/backend/internal/logger"
 	"github.com/worktrack/backend/internal/middleware"
 	"github.com/worktrack/backend/internal/services"
+	"github.com/worktrack/backend/internal/sse"
 )
 
 const Version = "0.1.0"
@@ -167,9 +168,16 @@ func buildApp(d appDeps) *fiber.App {
 
 	v1 := app.Group("/api/v1")
 
+	// === SSE hub for real-time push to connected agents ===
+	// One process-wide instance; injected into the handlers that
+	// publish events (AI package activate, command create) and the
+	// SSE handler that fans them out to subscribed agents.
+	hub := sse.NewHub()
+
 	// === Agent endpoints ===
 	agent := v1.Group("/agent")
 	agentH := handlers.NewAgentHandler(d.machineSvc, d.commandSvc, d.aiPackageSvc, d.notificationSvc)
+	streamH := handlers.NewAgentStreamHandler(hub)
 
 	// === Public agent endpoints (no X-Agent-Token required) ===
 	deploymentH := handlers.NewDeploymentHandler(d.deploymentSvc, d.notificationSvc)
@@ -193,8 +201,13 @@ func buildApp(d appDeps) *fiber.App {
 	agent.Post("/commands/:id/result", agentAuth, agentLimiter, agentH.SubmitResult)
 	agent.Post("/ai-launched", agentAuth, agentLimiter, agentH.AILaunched)
 
+	// SSE push channel — agent opens this on startup and keeps it
+	// alive. NOT rate-limited (it's a single long-lived connection
+	// per machine) and NOT subject to the per-minute counter.
+	agent.Get("/stream", agentAuth, streamH.Stream)
+
 	// AI client package metadata for the agent's auto-update loop.
-	aiH := handlers.NewAIPackageHandler(d.aiPackageSvc)
+	aiH := handlers.NewAIPackageHandler(d.aiPackageSvc, hub)
 	agent.Get("/ai-package", agentAuth, agentLimiter, aiH.AgentLatest)
 
 	// === Public install configuration endpoint ===
@@ -215,7 +228,7 @@ func buildApp(d appDeps) *fiber.App {
 	authGroup.Post("/logout", authH.Logout)
 
 	// === Admin endpoints (require JWT) ===
-	adminH := handlers.NewAdminHandler(d.adminSvc, d.commandSvc)
+	adminH := handlers.NewAdminHandler(d.adminSvc, d.commandSvc, hub)
 	admin := v1.Group("/admin", middleware.AdminAuth(d.jwtIssuer), limiter.New(limiter.Config{
 		Max:        d.cfg.Limits.AdminPerMinute,
 		Expiration: time.Minute,

@@ -12,18 +12,38 @@ import (
 	"github.com/worktrack/backend/internal/middleware"
 	"github.com/worktrack/backend/internal/models"
 	"github.com/worktrack/backend/internal/services"
+	"github.com/worktrack/backend/internal/sse"
 )
 
 type AIPackageHandler struct {
 	svc       *services.AIPackageService
+	hub       *sse.Hub // optional; nil OK in tests / when push disabled
 	validator *validator.Validate
 }
 
-func NewAIPackageHandler(svc *services.AIPackageService) *AIPackageHandler {
+func NewAIPackageHandler(svc *services.AIPackageService, hub *sse.Hub) *AIPackageHandler {
 	return &AIPackageHandler{
 		svc:       svc,
+		hub:       hub,
 		validator: validator.New(validator.WithRequiredStructEnabled()),
 	}
+}
+
+// broadcastActivePackage fans out the new active package metadata to
+// every agent currently subscribed to /api/v1/agent/stream. Lets the
+// fleet react in seconds instead of waiting on the next 60s heartbeat.
+func (h *AIPackageHandler) broadcastActivePackage(c *fiber.Ctx) {
+	if h.hub == nil {
+		return
+	}
+	resp, err := h.svc.GetActiveForAgent(c.Context())
+	if err != nil || resp == nil || !resp.Available {
+		return
+	}
+	h.hub.BroadcastAll(sse.Event{
+		Type:    "ai_package_changed",
+		Payload: resp,
+	})
 }
 
 func (h *AIPackageHandler) currentUser(c *fiber.Ctx) (*auth.Claims, bool) {
@@ -77,6 +97,9 @@ func (h *AIPackageHandler) Upload(c *fiber.Ctx) error {
 		log.Error().Err(err).Msg("ai package upload failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "upload failed"})
 	}
+	if setActive {
+		h.broadcastActivePackage(c)
+	}
 	return c.Status(fiber.StatusCreated).JSON(pkg)
 }
 
@@ -103,6 +126,9 @@ func (h *AIPackageHandler) RegisterExternal(c *fiber.Ctx) error {
 		log.Error().Err(err).Msg("register external ai package failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "register failed"})
 	}
+	if req.SetActive {
+		h.broadcastActivePackage(c)
+	}
 	return c.Status(fiber.StatusCreated).JSON(pkg)
 }
 
@@ -127,6 +153,7 @@ func (h *AIPackageHandler) Activate(c *fiber.Ctx) error {
 		log.Error().Err(err).Msg("activate ai package failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "activate failed"})
 	}
+	h.broadcastActivePackage(c)
 	return c.JSON(fiber.Map{"activated": true})
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/worktrack/agent/internal/api"
 	"github.com/worktrack/agent/internal/command"
 	"github.com/worktrack/agent/internal/config"
+	"github.com/worktrack/agent/internal/events"
 	"github.com/worktrack/agent/internal/heartbeat"
 	"github.com/worktrack/agent/internal/lock"
 	"github.com/worktrack/agent/internal/sysinfo"
@@ -241,9 +242,21 @@ func runLoops(cfg *config.Config) {
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// SSE push channel: the agent connects once and stays subscribed.
+	// The server pushes events ("ai_package_changed", "command_pending",
+	// "launch_ai") which we route to the same triggers heartbeat uses.
+	// Heartbeat remains the source of truth — SSE is the fast path.
+	pushHandlers := &eventHandlers{
+		aiUpdate:   aiUpdater,
+		aiLauncher: aiLauncher,
+		executor:   executor,
+	}
+	listener := events.New(cfg.APIBaseURL, cfg.AuthToken, Version, pushHandlers)
+
 	go hbLoop.Run(rootCtx)
 	go executor.Run(rootCtx)
 	go aiUpdater.Run(rootCtx)
+	go listener.Run(rootCtx)
 
 	log.Info().
 		Str("version", Version).
@@ -287,4 +300,41 @@ func initLogger(level string) {
 func fail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
+}
+
+// eventHandlers adapts the SSE listener's interface to the in-process
+// triggers we already had on the heartbeat path. We don't add new
+// goroutines or buffers here — every method just forwards to the
+// existing non-blocking trigger and returns immediately.
+type eventHandlers struct {
+	aiUpdate   *aiupdate.Updater
+	aiLauncher *ailauncher.Launcher
+	executor   *command.Executor
+}
+
+func (h *eventHandlers) OnAIPackageChanged(sha256, downloadURL, versionLabel string) {
+	if h.aiUpdate == nil {
+		return
+	}
+	// Same call the heartbeat path uses — pushes a wakeup to the
+	// updater goroutine, which then performs the SHA compare and
+	// downloads if needed.
+	h.aiUpdate.NotifyMetadata(context.Background(), sha256, downloadURL, versionLabel)
+}
+
+func (h *eventHandlers) OnCommandPending() {
+	if h.executor == nil {
+		return
+	}
+	h.executor.NotifyPendingCommands()
+}
+
+func (h *eventHandlers) OnLaunchAI() {
+	if h.aiLauncher == nil || h.aiLauncher.Done() {
+		return
+	}
+	// Trigger() is idempotent and one-shot per agent lifetime — safe
+	// to call from the SSE goroutine. We don't wait for it; if the
+	// network ack fails the next heartbeat will re-trigger.
+	go h.aiLauncher.Trigger(context.Background())
 }

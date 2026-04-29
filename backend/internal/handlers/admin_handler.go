@@ -13,18 +13,21 @@ import (
 	"github.com/worktrack/backend/internal/middleware"
 	"github.com/worktrack/backend/internal/models"
 	"github.com/worktrack/backend/internal/services"
+	"github.com/worktrack/backend/internal/sse"
 )
 
 type AdminHandler struct {
 	admin     *services.AdminService
 	commands  *services.CommandService
+	hub       *sse.Hub // optional; nil OK in tests
 	validator *validator.Validate
 }
 
-func NewAdminHandler(admin *services.AdminService, commands *services.CommandService) *AdminHandler {
+func NewAdminHandler(admin *services.AdminService, commands *services.CommandService, hub *sse.Hub) *AdminHandler {
 	return &AdminHandler{
 		admin:     admin,
 		commands:  commands,
+		hub:       hub,
 		validator: validator.New(validator.WithRequiredStructEnabled()),
 	}
 }
@@ -172,6 +175,20 @@ func (h *AdminHandler) CreateCommand(c *fiber.Ctx) error {
 	if err != nil {
 		log.Error().Err(err).Msg("create commands failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "create failed"})
+	}
+
+	// Push a "command_pending" wakeup to each target machine over its
+	// SSE stream so the executor polls within ~50ms instead of waiting
+	// for the next 60s heartbeat. The agent's executor is already
+	// idempotent (poll/result is exactly-once on the server) so this
+	// is purely a latency optimisation.
+	if h.hub != nil {
+		for _, machineID := range req.MachineIDs {
+			h.hub.SendToMachine(machineID.String(), sse.Event{
+				Type:    "command_pending",
+				Payload: map[string]any{},
+			})
+		}
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
