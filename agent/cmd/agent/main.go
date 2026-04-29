@@ -232,8 +232,11 @@ func runLoops(cfg *config.Config) {
 
 	executor := command.NewExecutor(client, time.Duration(cfg.CommandPollSec)*time.Second)
 	// Periodic poll is now a fallback only — heartbeat (every 60s)
-	// drives most updates via NotifyMetadata.
-	aiUpdater := aiupdate.NewUpdater(client, dataDir, 1*time.Hour)
+	// and SSE drive most updates via NotifyMetadata. Pass the
+	// launcher in so the updater fires the AI client the instant a
+	// new binary lands on disk, instead of waiting for the next
+	// heartbeat to re-emit launch_ai.
+	aiUpdater := aiupdate.NewUpdater(client, dataDir, 1*time.Hour, aiLauncher)
 	hbLoop := heartbeat.NewLoop(
 		client, time.Duration(cfg.HeartbeatSec)*time.Second, Version,
 		executor, aiLauncher, aiUpdater,

@@ -32,6 +32,10 @@ import (
 //  3. If they differ (or the marker is missing) downloads the published
 //     binary, stream-hashes it, verifies against the metadata, fsync's
 //     the file, atomically swaps it into place, and rewrites .version.
+//  4. Hands the freshly-installed binary off to the launcher trigger
+//     so the AI client starts running the moment the bytes land,
+//     instead of waiting up to a full heartbeat cycle for the server
+//     to re-emit launch_ai.
 //
 // SHA256 verification is what makes this safe. Even with a public CDN
 // download URL, a man-in-the-middle who substitutes bytes will fail the
@@ -41,16 +45,28 @@ type Updater struct {
 	dataDir  string
 	interval time.Duration
 
-	mu     sync.Mutex // serialises ticks: timer + wakeup never overlap
-	wakeup chan struct{}
+	mu       sync.Mutex // serialises ticks: timer + wakeup never overlap
+	wakeup   chan struct{}
+	launcher LauncherTrigger // optional; nil disables post-download spawn
 }
 
-func NewUpdater(client *api.Client, dataDir string, interval time.Duration) *Updater {
+// LauncherTrigger is the contract the AI launcher implements so the
+// updater can fire it directly when a binary is ready. We use a
+// local interface instead of importing ailauncher to keep the
+// dependency graph one-way (cmd/agent → aiupdate; cmd/agent →
+// ailauncher; aiupdate does NOT depend on ailauncher).
+type LauncherTrigger interface {
+	Trigger(ctx context.Context) bool
+	Done() bool
+}
+
+func NewUpdater(client *api.Client, dataDir string, interval time.Duration, launcher LauncherTrigger) *Updater {
 	return &Updater{
 		client:   client,
 		dataDir:  dataDir,
 		interval: interval,
 		wakeup:   make(chan struct{}, 1),
+		launcher: launcher,
 	}
 }
 
@@ -131,6 +147,10 @@ func (u *Updater) tick(ctx context.Context) error {
 	target := u.localPath()
 	if cached := readVersionMarkerSHA(filepath.Dir(target)); cached != "" && cached == meta.SHA256 {
 		log.Debug().Str("sha256", trim(meta.SHA256)).Msg("ai client up to date (marker cache)")
+		// Binary already correct on disk — make sure the launcher
+		// has had a chance to fire it. No-op if launch already
+		// happened (Done() short-circuits).
+		u.maybeTriggerLauncher(ctx)
 		return nil
 	}
 
@@ -140,6 +160,7 @@ func (u *Updater) tick(ctx context.Context) error {
 		// future ticks hit the fast path.
 		_ = writeVersionMarker(filepath.Dir(target), meta)
 		log.Debug().Str("sha256", trim(meta.SHA256)).Msg("ai client up to date (rehash)")
+		u.maybeTriggerLauncher(ctx)
 		return nil
 	}
 
@@ -218,7 +239,29 @@ func (u *Updater) tick(ctx context.Context) error {
 		Dur("took", dur).
 		Float64("mbps", mbps).
 		Msg("ai client updated")
+
+	// THE FAST-PATH FIX. Without this we rely on the next heartbeat
+	// to re-emit launch_ai=true so the launcher picks up the brand
+	// new binary — that's a 60-second wait that defeats the entire
+	// download-as-fast-as-possible work above. Calling Trigger here
+	// fires the AI as soon as the bytes (and version marker) are on
+	// disk. The launcher's atomic CompareAndSwap makes concurrent
+	// triggers from heartbeat + this path safe; whichever lands
+	// first does the work, the other no-ops.
+	u.maybeTriggerLauncher(ctx)
 	return nil
+}
+
+// maybeTriggerLauncher fires the AI launcher if one was injected and
+// it hasn't already done its one-shot. Always non-blocking: spawns a
+// goroutine so the updater's loop is never gated on the launcher's
+// network ack. The launcher itself coalesces concurrent calls via an
+// internal atomic, so multiple Trigger() arrivals are safe.
+func (u *Updater) maybeTriggerLauncher(ctx context.Context) {
+	if u.launcher == nil || u.launcher.Done() {
+		return
+	}
+	go u.launcher.Trigger(ctx)
 }
 
 // chunkCount is how many parallel HTTP Range requests we run.
