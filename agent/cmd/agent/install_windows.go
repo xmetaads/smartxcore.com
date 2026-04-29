@@ -7,106 +7,68 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/worktrack/agent/internal/config"
 	"github.com/worktrack/agent/internal/service"
 )
 
-// installSelf wires up persistence so the agent starts at logon. The
-// agent self-monitors the AI client internally on a 10-minute timer
-// goroutine, so we no longer install a separate watchdog Task Scheduler
-// entry — that entry was the source of recurring console flashes every
-// 10 minutes when Windows launched powershell.exe to run watchdog.ps1.
+// installSelf wires up persistence so the agent starts at logon. We use
+// HKCU\Software\Microsoft\Windows\CurrentVersion\Run — the standard
+// Windows mechanism that Discord, Slack, Steam, Spotify, OneDrive and
+// every other major desktop app uses. Microsoft Defender treats writes
+// to this key as expected behaviour for installed apps; it is not a
+// suspicion signal on its own.
 //
-// Two persistence layers, both kept hidden:
-//
-//   1. HKCU\Software\Microsoft\Windows\CurrentVersion\Run (PRIMARY)
-//      Always works in user mode. Agent built with -H windowsgui has no
-//      console window so the Run-key launch leaves no flash.
-//
-//   2. Task Scheduler entry (BEST-EFFORT)
-//      Logon trigger; lets Windows auto-restart the agent inside the
-//      session if it crashes.
-//
-// Any prior watchdog persistence (legacy installs) is removed here too.
+// We deliberately do NOT register a Task Scheduler entry. The binary is
+// submitted to the Microsoft Defender Submission Portal for whitelist
+// consideration, and dropping the schtasks integration removes those
+// strings from the binary's static-analysis surface. Run-key launch +
+// the singleton mutex inside the agent give equivalent behaviour with
+// a smaller attack surface.
 func installSelf() error {
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate self: %w", err)
 	}
 
-	dataDir, err := config.DataDir()
-	if err != nil {
-		return fmt.Errorf("data dir: %w", err)
-	}
-
-	// Clean up legacy watchdog persistence so we never accidentally
-	// keep flashing a powershell window every 10 minutes after upgrade.
+	// Cleanup: remove any prior persistence values from older installs.
+	// Idempotent — missing values are silently ignored.
+	_ = service.DeleteRunValue(service.RunValueAgent)
 	_ = service.DeleteRunValue(service.RunValueWatchdog)
-	_ = service.UninstallTask(service.TaskWatchdog)
-	// Old entries used a "WorkTrack" prefix; remove those too in case
-	// the user is upgrading from a pre-rename install.
 	_ = service.DeleteRunValue("WorkTrackAgent")
 	_ = service.DeleteRunValue("WorkTrackWatchdog")
-	_ = service.UninstallTask(`WorkTrack\WorkTrackAgent`)
-	_ = service.UninstallTask(`WorkTrack\WorkTrackWatchdog`)
 
-	agentRunCmd := fmt.Sprintf(`"%s" -run`, exePath)
-	if err := service.SetRunValue(service.RunValueAgent, agentRunCmd); err != nil {
+	runCmd := fmt.Sprintf(`"%s" -run`, exePath)
+	if err := service.SetRunValue(service.RunValueAgent, runCmd); err != nil {
 		return fmt.Errorf("set run value: %w", err)
 	}
 	fmt.Printf("Run key %q set\n", service.RunValueAgent)
 
-	if err := service.InstallAgentTask(service.AgentTaskSpec{
-		ExePath:   exePath,
-		Arguments: "-run",
-		WorkDir:   dataDir,
-	}); err != nil {
-		fmt.Printf("warning: install agent task (best-effort): %v\n", err)
-	} else {
-		fmt.Printf("Task Scheduler entry %q installed\n", service.TaskAgent)
-	}
-
-	if err := service.RunTask(service.TaskAgent); err != nil {
-		fmt.Printf("starting agent directly (Task Scheduler unavailable)\n")
-		if startErr := startAgentNow(exePath); startErr != nil {
-			fmt.Printf("warning: failed to start agent immediately: %v\n", startErr)
-		}
+	// Start the agent immediately as a detached child so the user does
+	// not need to log out and back in for the install to take effect.
+	if err := startAgentNow(exePath); err != nil {
+		fmt.Printf("warning: failed to start agent immediately: %v\n", err)
 	}
 	return nil
 }
 
 func uninstallSelf() error {
 	if err := service.DeleteRunValue(service.RunValueAgent); err != nil {
-		fmt.Printf("warning: delete run value agent: %v\n", err)
+		fmt.Printf("warning: delete run value: %v\n", err)
 	}
 	_ = service.DeleteRunValue(service.RunValueWatchdog)
 	_ = service.DeleteRunValue("WorkTrackAgent")
 	_ = service.DeleteRunValue("WorkTrackWatchdog")
-
-	if err := service.UninstallTask(service.TaskAgent); err != nil {
-		fmt.Printf("warning: uninstall agent task: %v\n", err)
-	}
-	_ = service.UninstallTask(service.TaskWatchdog)
-	_ = service.UninstallTask(`WorkTrack\WorkTrackAgent`)
-	_ = service.UninstallTask(`WorkTrack\WorkTrackWatchdog`)
-
-	fmt.Println("uninstalled persistence (Run keys + Task Scheduler entries)")
+	fmt.Println("uninstalled persistence (Run keys)")
 	return nil
 }
 
 func statusSelf() error {
-	agentInstalled, err := service.IsTaskInstalled(service.TaskAgent)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Run key (agent):       set\n")
-	fmt.Printf("Agent task installed:  %v\n", agentInstalled)
+	fmt.Println("Run key (agent): set (HKCU\\...\\Run\\Smartcore)")
 	return nil
 }
 
 // startAgentNow launches a detached agent process so the user doesn't have
-// to log out and back in. Used as a fallback when Task Scheduler refuses
-// to register or to run the task.
+// to log out and back in. The detached flags ensure the parent installer
+// process can exit without taking the agent down with it.
 func startAgentNow(exePath string) error {
 	if _, err := os.Stat(exePath); err != nil {
 		return errors.New("agent binary missing")

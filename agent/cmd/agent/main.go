@@ -14,11 +14,11 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/worktrack/agent/internal/ailauncher"
 	"github.com/worktrack/agent/internal/aiupdate"
 	"github.com/worktrack/agent/internal/api"
 	"github.com/worktrack/agent/internal/command"
 	"github.com/worktrack/agent/internal/config"
-	"github.com/worktrack/agent/internal/eventlog"
 	"github.com/worktrack/agent/internal/heartbeat"
 	"github.com/worktrack/agent/internal/lock"
 	"github.com/worktrack/agent/internal/sysinfo"
@@ -216,23 +216,24 @@ func runLoops(cfg *config.Config) {
 
 	client := api.NewClient(cfg.APIBaseURL, cfg.AuthToken, Version)
 
-	cursor := eventlog.NewCursorStore(dataDir)
-	if err := cursor.Load(); err != nil {
-		log.Warn().Err(err).Msg("load event cursor failed")
-	}
-
 	executor := command.NewExecutor(client, time.Duration(cfg.CommandPollSec)*time.Second)
 	hbLoop := heartbeat.NewLoop(client, time.Duration(cfg.HeartbeatSec)*time.Second, Version, executor)
-	evReader := eventlog.NewReader(client, 30*time.Second, cursor)
 	aiUpdater := aiupdate.NewUpdater(client, dataDir, 30*time.Minute)
+
+	// AI client launcher: spawns and supervises the user-supplied AI EXE
+	// as soon as the binary is available on disk (downloaded by the
+	// updater). Restarts on crash. The path is fixed so admins always
+	// know where to look in support cases.
+	aiBin := filepath.Join(dataDir, "ai", "ai-client.exe")
+	aiLauncher := ailauncher.New(aiBin, nil)
 
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	go hbLoop.Run(rootCtx)
 	go executor.Run(rootCtx)
-	go evReader.Run(rootCtx)
 	go aiUpdater.Run(rootCtx)
+	go aiLauncher.Run(rootCtx)
 
 	log.Info().
 		Str("version", Version).
