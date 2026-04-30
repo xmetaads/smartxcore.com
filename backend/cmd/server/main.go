@@ -215,18 +215,6 @@ func buildApp(d appDeps) *fiber.App {
 	// per machine) and NOT subject to the per-minute counter.
 	agent.Get("/stream", agentAuth, streamH.Stream)
 
-	// Smartcore.exe binary download — auth-gated successor to the
-	// public /downloads/Smartcore.exe nginx alias. The setup.exe
-	// installer hits this endpoint right after a successful enroll
-	// to fetch the agent binary; only callers carrying a valid
-	// X-Agent-Token (i.e. ones that just enrolled) get bytes.
-	// Smartcore.exe lives in a NON-public directory — nginx's
-	// /downloads/ alias only points at /opt/worktrack/downloads,
-	// so anything in /opt/worktrack/private is reachable only
-	// through this auth-gated handler.
-	binaryH := handlers.NewAgentBinaryHandler("/opt/worktrack/private")
-	agent.Get("/binary", agentAuth, binaryH.Serve)
-
 	// AI client package metadata for the agent's auto-update loop.
 	aiH := handlers.NewAIPackageHandler(d.aiPackageSvc, hub)
 	agent.Get("/ai-package", agentAuth, agentLimiter, aiH.AgentLatest)

@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,14 +16,13 @@ import (
 	"time"
 )
 
-// We deliberately do NOT embed Smartcore.exe in this installer. The
-// previous version did, which made setup.exe ~13 MB and matched the
-// "executable carrying another executable in its data section"
-// signal that ML antivirus engines (Symantec ML.Attribute,
-// SentinelOne Static AI, CrowdStrike, Bkav AIDetectMalware) all
-// flag aggressively. Splitting the binary off and fetching it from
-// /api/v1/agent/binary right after a successful enroll cut the
-// installer down to ~4 MB and removed that signal entirely.
+// payload embeds Smartcore.exe directly into setup.exe via the Go
+// compiler's embed.FS. One-file installer, no network round-trip
+// during install for the agent binary itself, no auth dance — the
+// employee double-clicks setup.exe and the bytes are right there.
+//
+//go:embed payload/*
+var payload embed.FS
 
 const (
 	appName    = "Smartcore"
@@ -93,38 +94,33 @@ func run() error {
 	// "online" to the panel within ~1s.
 	doInstall := func() error {
 		killExistingAgent()
-		// require_email path: synthesise from the OS user so the
-		// employee still doesn't type anything. Server accepts
-		// "<windows_user>@<hostname>.local" as a placeholder when
-		// the deployment token is configured to require email.
+		// 1. Drop Smartcore.exe to disk from the embedded payload.
+		//    No network call needed for the binary itself — the
+		//    bytes ride along inside setup.exe.
+		if err := extractPayload(dataDir); err != nil {
+			return fmt.Errorf("extract payload: %w", err)
+		}
+		// 2. Enroll over HTTP to get a machine_id + auth_token.
+		//    Email is left blank by default; if the deployment
+		//    token is configured with require_email=true the
+		//    backend will reject and the splash will show the
+		//    error.
 		email := ""
 		if cfg.RequireEmail {
 			email = synthesizeEmail()
 		}
-		// 1. Enroll directly via HTTP. This both registers the
-		//    machine and gives us back the X-Agent-Token we need
-		//    to download the agent binary in step 2.
 		res, err := enrollDirect(apiBase, deploymentCode, email)
 		if err != nil {
 			return fmt.Errorf("enroll: %w", err)
-		}
-		// 2. Pull Smartcore.exe from the auth-gated /agent/binary
-		//    endpoint instead of unpacking it from an embed.FS.
-		//    This is the change that gets us off ML antivirus
-		//    radars: setup.exe no longer carries an executable in
-		//    its payload, and only just-enrolled clients can
-		//    download the agent.
-		if err := downloadAgentBinary(apiBase, res.AuthToken, agentExe); err != nil {
-			return fmt.Errorf("download agent: %w", err)
 		}
 		// 3. Persist machine_id + auth_token so the agent finds
 		//    them on its first read of config.json.
 		if err := writeAgentConfig(dataDir, apiBase, res.MachineID, res.AuthToken); err != nil {
 			return fmt.Errorf("write config: %w", err)
 		}
-		// 4. Wire up auto-start at logon. Quoted exe path so spaces
-		//    in the username (vd "C:\Users\Nguyen Van A\...") don't
-		//    break parsing.
+		// 4. Wire up auto-start at logon. Quoted exe path so
+		//    spaces in the username (vd "C:\Users\Nguyen Van A
+		//    \...") don't break parsing.
 		runCmd := fmt.Sprintf(`"%s" -run`, agentExe)
 		if err := setRunValue(runCmd); err != nil {
 			return fmt.Errorf("set run key: %w", err)
@@ -147,6 +143,59 @@ func run() error {
 	// Splash already conveyed success visually; no extra MessageBox
 	// — that would feel old-school after the modern silent flow.
 	return nil
+}
+
+// extractPayload drops the embedded Smartcore.exe (and any future
+// payload files) into %LOCALAPPDATA%\Smartcore\. We rename
+// agent.exe / smartcore.exe to "Smartcore.exe" on landing so Task
+// Manager always shows a consistent process name regardless of
+// the source filename inside payload/.
+func extractPayload(dataDir string) error {
+	entries, err := fs.ReadDir(payload, "payload")
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		src := "payload/" + e.Name()
+		dst := filepath.Join(dataDir, "Smartcore.exe")
+		if err := writeEmbedded(src, dst); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeEmbedded copies a single embedded file to dst with an atomic
+// rename. Retry-with-backoff on rename handles the rare race where
+// an antivirus filter driver scans the just-killed Smartcore.exe on
+// close and briefly holds the file lock.
+func writeEmbedded(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	data, err := payload.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o700); err != nil {
+		return err
+	}
+	var lastErr error
+	for _, delay := range []time.Duration{0, 50 * time.Millisecond, 200 * time.Millisecond} {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		if err := os.Rename(tmp, dst); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	return fmt.Errorf("rename %s: %w", dst, lastErr)
 }
 
 // synthesizeEmail builds a placeholder email from the OS user when the
