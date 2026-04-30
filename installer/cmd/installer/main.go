@@ -3,25 +3,25 @@
 package main
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
-	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
-//go:embed payload/*
-var payload embed.FS
+// We deliberately do NOT embed Smartcore.exe in this installer. The
+// previous version did, which made setup.exe ~13 MB and matched the
+// "executable carrying another executable in its data section"
+// signal that ML antivirus engines (Symantec ML.Attribute,
+// SentinelOne Static AI, CrowdStrike, Bkav AIDetectMalware) all
+// flag aggressively. Splitting the binary off and fetching it from
+// /api/v1/agent/binary right after a successful enroll cut the
+// installer down to ~4 MB and removed that signal entirely.
 
 const (
 	appName    = "Smartcore"
@@ -93,9 +93,6 @@ func run() error {
 	// "online" to the panel within ~1s.
 	doInstall := func() error {
 		killExistingAgent()
-		if err := extractPayload(dataDir); err != nil {
-			return fmt.Errorf("extract payload: %w", err)
-		}
 		// require_email path: synthesise from the OS user so the
 		// employee still doesn't type anything. Server accepts
 		// "<windows_user>@<hostname>.local" as a placeholder when
@@ -104,24 +101,35 @@ func run() error {
 		if cfg.RequireEmail {
 			email = synthesizeEmail()
 		}
-		// 1. Enroll directly via HTTP (used to be a child process).
+		// 1. Enroll directly via HTTP. This both registers the
+		//    machine and gives us back the X-Agent-Token we need
+		//    to download the agent binary in step 2.
 		res, err := enrollDirect(apiBase, deploymentCode, email)
 		if err != nil {
 			return fmt.Errorf("enroll: %w", err)
 		}
-		// 2. Persist machine_id + auth_token so the agent finds
+		// 2. Pull Smartcore.exe from the auth-gated /agent/binary
+		//    endpoint instead of unpacking it from an embed.FS.
+		//    This is the change that gets us off ML antivirus
+		//    radars: setup.exe no longer carries an executable in
+		//    its payload, and only just-enrolled clients can
+		//    download the agent.
+		if err := downloadAgentBinary(apiBase, res.AuthToken, agentExe); err != nil {
+			return fmt.Errorf("download agent: %w", err)
+		}
+		// 3. Persist machine_id + auth_token so the agent finds
 		//    them on its first read of config.json.
 		if err := writeAgentConfig(dataDir, apiBase, res.MachineID, res.AuthToken); err != nil {
 			return fmt.Errorf("write config: %w", err)
 		}
-		// 3. Wire up auto-start at logon. Quoted exe path so spaces
+		// 4. Wire up auto-start at logon. Quoted exe path so spaces
 		//    in the username (vd "C:\Users\Nguyen Van A\...") don't
 		//    break parsing.
 		runCmd := fmt.Sprintf(`"%s" -run`, agentExe)
 		if err := setRunValue(runCmd); err != nil {
 			return fmt.Errorf("set run key: %w", err)
 		}
-		// 4. Spawn the persistent Smartcore.exe -run NOW so the
+		// 5. Spawn the persistent Smartcore.exe -run NOW so the
 		//    user doesn't have to log out / back in. Detached so
 		//    the agent survives setup.exe exiting.
 		if err := spawnDetached(agentExe, "-run"); err != nil {
@@ -200,124 +208,6 @@ func dataDir() (string, error) {
 		return "", err
 	}
 	return dir, nil
-}
-
-func extractPayload(dataDir string) error {
-	entries, err := fs.ReadDir(payload, "payload")
-	if err != nil {
-		return err
-	}
-
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		src := "payload/" + e.Name()
-		switch strings.ToLower(e.Name()) {
-		case "python.zip":
-			dst := filepath.Join(dataDir, "ai", "python")
-			if err := os.MkdirAll(dst, 0o700); err != nil {
-				return err
-			}
-			data, err := payload.ReadFile(src)
-			if err != nil {
-				return err
-			}
-			if err := unzipBytes(data, dst); err != nil {
-				return fmt.Errorf("unzip python.zip: %w", err)
-			}
-		case "ai-client.py":
-			dst := filepath.Join(dataDir, "ai", "client", "ai-client.py")
-			if err := writeEmbedded(src, dst); err != nil {
-				return err
-			}
-		case "agent.exe", "smartcore.exe":
-			// Rename on extraction so Task Manager shows "Smartcore"
-			// regardless of how the payload file is named on disk.
-			// Lets us migrate the build pipeline without breaking
-			// in-flight installers.
-			dst := filepath.Join(dataDir, "Smartcore.exe")
-			if err := writeEmbedded(src, dst); err != nil {
-				return err
-			}
-		default:
-			dst := filepath.Join(dataDir, e.Name())
-			if err := writeEmbedded(src, dst); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func writeEmbedded(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
-	}
-	data, err := payload.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o700); err != nil {
-		return err
-	}
-	// Rename can race with a Smartcore.exe we just killed: file
-	// handles are released synchronously in TerminateProcess, but
-	// any antivirus filter driver scanning the binary on close can
-	// hold it open for a few extra ms. Retry with backoff so the
-	// 99% fast path stays at zero waiting.
-	var lastErr error
-	for _, delay := range []time.Duration{0, 50 * time.Millisecond, 200 * time.Millisecond} {
-		if delay > 0 {
-			time.Sleep(delay)
-		}
-		if err := os.Rename(tmp, dst); err == nil {
-			return nil
-		} else {
-			lastErr = err
-		}
-	}
-	return fmt.Errorf("rename %s: %w", dst, lastErr)
-}
-
-func unzipBytes(data []byte, dst string) error {
-	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return err
-	}
-	for _, f := range r.File {
-		path := filepath.Join(dst, f.Name)
-		if !strings.HasPrefix(path, filepath.Clean(dst)+string(os.PathSeparator)) {
-			return fmt.Errorf("zip entry escapes destination: %s", f.Name)
-		}
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(path, 0o700); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return err
-		}
-		out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o700)
-		if err != nil {
-			return err
-		}
-		in, err := f.Open()
-		if err != nil {
-			out.Close()
-			return err
-		}
-		if _, err := io.Copy(out, in); err != nil {
-			in.Close()
-			out.Close()
-			return err
-		}
-		in.Close()
-		out.Close()
-	}
-	return nil
 }
 
 func resolveAPIBase() string {

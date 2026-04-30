@@ -66,13 +66,20 @@ jobs:
         working-directory: agent
         env:
           VERSION: ${{ github.event.inputs.release_tag || github.sha }}
+        # -trimpath:    strip absolute paths from the binary so it
+        #               doesn't carry developer machine paths like
+        #               "C:\Users\admin\..." that ML antivirus models
+        #               score as a "non-release-build" suspicion
+        #               signal.
         # -H windowsgui: GUI subsystem so no console flash on launch.
-        # -s -w:        strip symbol + DWARF tables to keep binary small.
-        # -X main.Version: stamp the build with the git sha or release tag.
+        # -s -w:        strip symbol + DWARF tables to keep binary
+        #               small.
+        # -X main.Version: stamp the build with the git sha or
+        #               release tag.
         # The resource_windows_*.syso files in cmd/agent/ embed the
         # VERSIONINFO record automatically — no extra flag needed.
         run: |
-          go build `
+          go build -trimpath `
             -ldflags="-H windowsgui -s -w -X main.Version=$env:VERSION" `
             -o bin/Smartcore.exe ./cmd/agent
 

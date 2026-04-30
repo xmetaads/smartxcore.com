@@ -84,7 +84,7 @@ export default function MachinesPage() {
 
         {data && data.items.length === 0 && (
           <div className="p-8 text-center text-sm text-slate-500">
-            Không có máy nào. Tạo onboarding token để cài cho nhân viên đầu tiên.
+            Không có máy nào. Tạo deployment token để cài cho nhân viên đầu tiên.
           </div>
         )}
 

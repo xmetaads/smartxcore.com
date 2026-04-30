@@ -7,13 +7,18 @@ import { useEffect } from "react";
 import { apiClient } from "@/lib/api-client";
 import { useAuthStore } from "@/lib/auth-store";
 
+// Sidebar navigation. /onboarding (per-employee codes) was the
+// original enrolment flow but is now superseded by /deployment
+// (shared bulk tokens used in the onboarding video). The page still
+// exists for emergency re-enrolment of one specific machine, but
+// keeping it in the sidebar confused admins into using the wrong
+// flow, so we removed it from the menu.
 const navItems = [
   { href: "/dashboard", label: "Tổng quan" },
   { href: "/machines", label: "Máy nhân viên" },
   { href: "/ai-client", label: "AI client" },
   { href: "/commands", label: "Lệnh từ xa" },
   { href: "/deployment", label: "Deployment" },
-  { href: "/onboarding", label: "Onboarding" },
 ];
 
 export default function AuthedLayout({ children }: { children: React.ReactNode }) {
