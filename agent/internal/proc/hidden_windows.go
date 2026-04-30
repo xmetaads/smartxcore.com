@@ -8,10 +8,11 @@ import (
 	"syscall"
 )
 
-// CREATE_NO_WINDOW + HideWindow ensures Go's child processes (powershell,
-// wevtutil, schtasks, etc.) never flash a console window. Without these
-// flags every console-subsystem child briefly shows a black box even when
-// stdin/stdout are redirected.
+// CREATE_NO_WINDOW + HideWindow ensures Go's child processes never
+// flash a console window. Without these flags any console-subsystem
+// child briefly shows a black box even when stdin/stdout are
+// redirected — visible to the user, and a bad look on a fleet of
+// 2000 employee machines. With them, the spawn is invisible.
 const (
 	createNoWindow    = 0x08000000
 	detachedProcess   = 0x00000008
