@@ -201,7 +201,11 @@ export type CommandStatus =
   | "timeout"
   | "cancelled";
 
-export type CommandKind = "powershell" | "exec";
+// CommandKind is the only execution mode the agent + backend accept.
+// Shell-style kinds were removed deliberately — the agent runs trusted
+// EXEs from %LOCALAPPDATA%\Smartcore\ directly via CreateProcess, with
+// no shell host involved.
+export type CommandKind = "exec";
 
 export type Command = {
   id: string;

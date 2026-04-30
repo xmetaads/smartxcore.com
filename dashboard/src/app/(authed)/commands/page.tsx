@@ -103,7 +103,7 @@ export default function CommandsPage() {
         <p className="text-sm text-slate-500">
           Chạy một EXE đã deploy trên máy nhân viên. Agent chỉ chạy binary nằm trong{" "}
           <code className="rounded bg-slate-100 px-1 text-xs">%LOCALAPPDATA%\Smartcore\</code>
-          — không có shell, không PowerShell, an toàn 100% với Microsoft Defender.
+          — không có shell, không script host, an toàn 100% với Microsoft Defender.
         </p>
       </div>
 

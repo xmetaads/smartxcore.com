@@ -108,6 +108,7 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
   const [setActive, setSetActive] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [hashing, setHashing] = useState(false);
 
   const mutation = useMutation({
     mutationFn: registerExternalAIPackage,
@@ -149,6 +150,29 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
     });
   }
 
+  // hashLocalFile uses the browser's Web Crypto API to compute the
+  // SHA256 of a file picked by the admin and auto-fills the form.
+  // One click instead of three steps, and zero shell command in the UI.
+  // Runs entirely client-side; the file never leaves the admin's machine.
+  async function hashLocalFile(file: File) {
+    setError(null);
+    setHashing(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const digest = await crypto.subtle.digest("SHA-256", buf);
+      const hex = Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      setSha256(hex);
+      setSizeBytes(String(file.size));
+      if (!filename.trim()) setFilename(file.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Hash failed");
+    } finally {
+      setHashing(false);
+    }
+  }
+
   return (
     <div className="rounded-lg border bg-white p-6 shadow-sm">
       <h3 className="text-base font-medium">Đăng ký URL từ CDN (Bunny / R2)</h3>
@@ -157,6 +181,25 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
         Agents sẽ tải từ CDN edge gần nhất thay vì qua VPS — cực kỳ nhanh.
       </p>
       <form onSubmit={handleSubmit} className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="md:col-span-2 rounded-md border border-dashed border-slate-300 bg-slate-50 p-3">
+          <label className="block text-xs font-medium text-slate-600">
+            Chọn file AI client để tự động tính SHA256 + size
+          </label>
+          <input
+            type="file"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) hashLocalFile(f);
+            }}
+            className="mt-2 block w-full text-sm file:mr-3 file:rounded file:border-0 file:bg-slate-200 file:px-3 file:py-1.5 file:text-xs file:font-medium hover:file:bg-slate-300"
+          />
+          {hashing && (
+            <p className="mt-1 text-xs text-slate-500">Đang tính SHA256…</p>
+          )}
+          <p className="mt-1 text-xs text-slate-500">
+            File chỉ đọc trong trình duyệt — không upload đi đâu cả.
+          </p>
+        </div>
         <div className="md:col-span-2">
           <label className="block text-xs font-medium text-slate-600">CDN URL</label>
           <input
@@ -176,14 +219,11 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
             type="text"
             required
             pattern="[a-fA-F0-9]{64}"
-            placeholder="a3f7e9..."
+            placeholder="auto-fill khi chọn file ở trên"
             value={sha256}
             onChange={(e) => setSha256(e.target.value)}
             className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-xs"
           />
-          <p className="mt-1 text-xs text-slate-500">
-            PowerShell: <code>Get-FileHash file.exe -Algorithm SHA256</code>
-          </p>
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600">Size (bytes)</label>
