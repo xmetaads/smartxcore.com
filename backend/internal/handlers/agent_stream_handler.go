@@ -2,14 +2,17 @@ package handlers
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"github.com/worktrack/backend/internal/middleware"
+	"github.com/worktrack/backend/internal/services"
 	"github.com/worktrack/backend/internal/sse"
 )
 
@@ -48,11 +51,12 @@ import (
 // replaced) the agent reconnects with exponential backoff. State the
 // agent missed during the gap is reconciled by the next heartbeat.
 type AgentStreamHandler struct {
-	hub *sse.Hub
+	hub      *sse.Hub
+	machines *services.MachineService
 }
 
-func NewAgentStreamHandler(hub *sse.Hub) *AgentStreamHandler {
-	return &AgentStreamHandler{hub: hub}
+func NewAgentStreamHandler(hub *sse.Hub, machines *services.MachineService) *AgentStreamHandler {
+	return &AgentStreamHandler{hub: hub, machines: machines}
 }
 
 // Stream is the Fiber handler for GET /api/v1/agent/stream.
@@ -72,6 +76,24 @@ func (h *AgentStreamHandler) Stream(c *fiber.Ctx) error {
 	c.Set("X-Accel-Buffering", "no")
 
 	events, cleanup := h.hub.Subscribe(machineID)
+
+	// Real-time presence: flip the row to online the moment the SSE
+	// stream connects (stays consistent with what the dashboard
+	// shows). When the writer goroutine returns — agent killed,
+	// network dropped, deploy rolled — flip back to offline so the
+	// panel doesn't show a dead agent for the next 90s of heartbeat-
+	// freshness slack. Both writes are best-effort: a failure here
+	// just means the periodic sync worker takes a beat to catch up.
+	if mid, err := uuid.Parse(machineID); err == nil {
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = h.machines.SetOnline(bgCtx, mid)
+		bgCancel()
+		defer func(mid uuid.UUID) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = h.machines.SetOffline(ctx, mid)
+		}(mid)
+	}
 
 	c.Status(fiber.StatusOK).Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 		defer cleanup()

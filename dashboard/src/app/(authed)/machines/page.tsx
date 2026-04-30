@@ -18,7 +18,12 @@ export default function MachinesPage() {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["machines", { search, onlineOnly, page }],
     queryFn: () => listMachines({ search, online: onlineOnly, page, pageSize: 50 }),
-    refetchInterval: 30_000,
+    // Poll every 5s instead of every 30s so the online/offline
+    // indicator catches up quickly after an agent is killed. The
+    // payload is small (one DB query) and 5s on a low-load admin
+    // panel is essentially free; if we ever hit scale this can be
+    // bumped or replaced with an SSE channel for the dashboard.
+    refetchInterval: 5_000,
   });
 
   const deleteMutation = useMutation({

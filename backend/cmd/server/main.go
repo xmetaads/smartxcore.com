@@ -151,6 +151,15 @@ func buildApp(d appDeps) *fiber.App {
 		WriteTimeout:          30 * time.Second,
 		IdleTimeout:           120 * time.Second,
 		ErrorHandler:          errorHandler,
+		// We sit behind nginx on the same VPS (loopback), so c.IP()
+		// would otherwise return 127.0.0.1 for every request and the
+		// machines table would record "127.0.0.1" as everyone's
+		// public_ip — exactly the bug we hit. Telling Fiber to trust
+		// X-Forwarded-For from 127.0.0.1 lets it pick up the real
+		// client address that nginx already populates.
+		ProxyHeader:             "X-Forwarded-For",
+		EnableTrustedProxyCheck: true,
+		TrustedProxies:          []string{"127.0.0.1", "::1"},
 	})
 
 	app.Use(recover.New())
@@ -177,7 +186,7 @@ func buildApp(d appDeps) *fiber.App {
 	// === Agent endpoints ===
 	agent := v1.Group("/agent")
 	agentH := handlers.NewAgentHandler(d.machineSvc, d.commandSvc, d.aiPackageSvc, d.notificationSvc)
-	streamH := handlers.NewAgentStreamHandler(hub)
+	streamH := handlers.NewAgentStreamHandler(hub, d.machineSvc)
 
 	// === Public agent endpoints (no X-Agent-Token required) ===
 	deploymentH := handlers.NewDeploymentHandler(d.deploymentSvc, d.notificationSvc)
@@ -366,11 +375,14 @@ func runAlertWorker(ctx context.Context, svc *services.AlertService) {
 	}
 }
 
-// runOnlineSyncWorker keeps machines.is_online accurate based on heartbeat
-// freshness. Runs every minute so the dashboard reflects reality even when
-// agents stop heartbeating without sending an explicit shutdown event.
+// runOnlineSyncWorker keeps machines.is_online accurate based on
+// heartbeat freshness. Runs every 15s — a 4× speedup over the
+// previous one-minute cadence. SSE-based real-time updates handle
+// the common case (agent connected); this loop catches the missed
+// case (no SSE, just heartbeats) so a killed agent disappears from
+// the panel within ~100s instead of the previous 3-4 minutes.
 func runOnlineSyncWorker(ctx context.Context, svc *services.AlertService) {
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	for {

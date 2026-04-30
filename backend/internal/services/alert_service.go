@@ -128,12 +128,24 @@ func (s *AlertService) MarkOnlineMachinesResolved(ctx context.Context) (int64, e
 }
 
 // SyncOnlineFlag flips machines.is_online based on heartbeat freshness.
-// Run frequently (every minute or two) so the dashboard reflects reality.
-// Threshold is 3x heartbeat interval (180s) — gives slack for one missed beat.
+// Threshold is 90 seconds — 1.5× the heartbeat interval, just enough
+// slack for one missed beat plus jitter. Tighter than the previous
+// 3-minute window so killing the agent (or losing network) reflects
+// in the dashboard within ~100 seconds via the polling fallback.
+//
+// Real-time updates run independently via the SSE channel: when an
+// agent disconnects, the SSE handler flips is_online to FALSE
+// immediately; when it reconnects, true. The sync below is a backup
+// for the case where SSE isn't connected (firewalled, deploy
+// rolling) so the heartbeat still drives correctness.
 func (s *AlertService) SyncOnlineFlag(ctx context.Context) error {
+	// COALESCE the freshness check so a row with last_seen_at = NULL
+	// (machine that enrolled but never heartbeated) collapses to FALSE
+	// instead of NULL — otherwise the UPDATE blows up with "null value
+	// in column is_online violates not-null constraint".
 	_, err := s.db.Pool.Exec(ctx, `
 		UPDATE machines
-		SET is_online = (last_seen_at > NOW() - INTERVAL '3 minutes')
+		SET is_online = COALESCE(last_seen_at > NOW() - INTERVAL '90 seconds', FALSE)
 		WHERE disabled_at IS NULL
 	`)
 	return err

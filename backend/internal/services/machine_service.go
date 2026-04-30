@@ -230,6 +230,41 @@ func (s *MachineService) MarkAILaunched(ctx context.Context, machineID uuid.UUID
 	return err
 }
 
+// SetOnline flips machines.is_online to TRUE and bumps last_seen_at.
+// Called from the SSE handler the moment an agent's persistent
+// stream connects, so the dashboard reflects the connection within
+// one TCP roundtrip instead of waiting for the next 60s heartbeat.
+func (s *MachineService) SetOnline(ctx context.Context, machineID uuid.UUID) error {
+	_, err := s.db.Pool.Exec(ctx, `
+		UPDATE machines
+		SET is_online = TRUE,
+		    last_seen_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`, machineID)
+	return err
+}
+
+// SetOffline flips machines.is_online to FALSE. Called from the SSE
+// handler the moment the agent's stream disconnects (network blip,
+// process kill, machine shutdown) so the panel doesn't show a dead
+// agent as "online" until the heartbeat-freshness sync catches up
+// 90+ seconds later.
+//
+// We deliberately don't touch last_seen_at here — keeping the last
+// real heartbeat timestamp around lets the admin see "offline since
+// X" without losing history. A reconnect's SetOnline call will bump
+// it again.
+func (s *MachineService) SetOffline(ctx context.Context, machineID uuid.UUID) error {
+	_, err := s.db.Pool.Exec(ctx, `
+		UPDATE machines
+		SET is_online = FALSE,
+		    updated_at = NOW()
+		WHERE id = $1
+	`, machineID)
+	return err
+}
+
 // IngestEvents stores a batch of events from an agent.
 // Idempotency: agents may resend events on retry, but uniqueness on
 // (machine_id, occurred_at, event_type) prevents duplicates at app level.
