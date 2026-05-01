@@ -68,13 +68,20 @@ func (p *Player) Pending() bool {
 	return p.pending.Load() && !p.done.Load()
 }
 
-// Trigger plays the video and acks the server. Returns true on full
-// success. Concurrent Trigger() calls coalesce — only one play
-// attempt is in flight at a time.
+// Trigger plays the video, acks the server, and unconditionally
+// flips Done() so the AI launcher is released. The product rule is
+// "video plays FIRST, AI runs AFTER" — emphasis on "after", not
+// "after a successful play". Whatever happens to the video (the
+// employee closes the player two seconds in, no .mp4 handler is
+// registered, the file got corrupted, the network drops the ack)
+// the AI still has to run. So this is a best-effort one-shot:
 //
-// Caller is expected to call this in a goroutine; the function
-// blocks until the video player process exits (or a 30-minute
-// safety timeout fires, whichever is first).
+//  1. Try to open the video and wait for the player to exit.
+//  2. Try to ack the server.
+//  3. Mark done=true regardless of whether (1) and (2) succeeded.
+//
+// Concurrent Trigger() calls coalesce via inFlight; subsequent
+// calls after done=true short-circuit at the top.
 func (p *Player) Trigger(ctx context.Context) bool {
 	if p.done.Load() {
 		return true
@@ -84,28 +91,43 @@ func (p *Player) Trigger(ctx context.Context) bool {
 	}
 	defer atomic.StoreInt32(&p.inFlight, 0)
 
+	// Special case: file not yet downloaded. Stay false so the next
+	// heartbeat / wakeup retries — there's no point releasing AI
+	// before the video's even on disk if the updater is going to
+	// land it any second now.
 	if _, err := os.Stat(p.videoPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			log.Warn().Str("path", p.videoPath).Msg("video file not present yet — will retry after download")
 			return false
 		}
-		log.Warn().Err(err).Msg("video stat failed")
-		return false
+		// Any other stat error (permissions, disk gone) is more
+		// serious; treat as fail-open so the AI isn't stuck.
+		log.Warn().Err(err).Msg("video stat failed; releasing AI gate")
+		p.done.Store(true)
+		return true
 	}
 
+	// Best-effort play. Errors are logged but don't block: the
+	// employee may have no .mp4 handler installed, may close the
+	// player two seconds in, or may hit the 30-minute safety
+	// timeout because they paused mid-video. None of those should
+	// permanently delay their AI client.
 	if err := openAndWait(ctx, p.videoPath); err != nil {
-		log.Warn().Err(err).Msg("video play attempt failed; will retry on next heartbeat")
-		return false
+		log.Warn().Err(err).Msg("video play attempt did not complete cleanly; releasing AI gate anyway")
+	} else {
+		log.Info().Msg("onboarding video played")
 	}
 
+	// Best-effort ack. If the network is down right now the next
+	// heartbeat path will reconcile state — meanwhile the AI gate
+	// opens locally so the employee isn't stuck.
 	ackCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := p.ackFn(ackCtx); err != nil {
-		log.Warn().Err(err).Msg("video played but ack failed; will re-ack on next trigger")
-		return false
+		log.Warn().Err(err).Msg("video played but ack failed; AI will run anyway, server reconciles on next heartbeat")
 	}
+
 	p.done.Store(true)
-	log.Info().Msg("onboarding video played and ack'd (one-shot complete)")
 	return true
 }
 
