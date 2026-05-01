@@ -9,7 +9,6 @@ import {
   listAIPackages,
   registerExternalAIPackage,
   revokeAIPackage,
-  uploadAIPackage,
 } from "@/lib/queries";
 
 // Admin uploads the AI client binary here. Once one is "active", agents
@@ -59,8 +58,6 @@ export default function AIClientPage() {
       </div>
 
       <ExternalURLForm onRegistered={() => packagesQuery.refetch()} />
-
-      <UploadForm onUploaded={() => packagesQuery.refetch()} />
 
       <div className="rounded-lg border bg-white shadow-sm">
         <div className="border-b p-4">
@@ -297,132 +294,6 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
             {mutation.isPending ? "Đang đăng ký..." : "Đăng ký URL"}
           </button>
         </div>
-      </form>
-    </div>
-  );
-}
-
-function UploadForm({ onUploaded }: { onUploaded: () => void }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [versionLabel, setVersionLabel] = useState("");
-  const [notes, setNotes] = useState("");
-  const [setActive, setSetActive] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-
-  const mutation = useMutation({
-    mutationFn: uploadAIPackage,
-    onSuccess: (data) => {
-      setSuccess(
-        `Upload thành công: ${data.filename} (SHA256 ${data.sha256.slice(0, 12)}…)${
-          data.is_active ? " — đã active. Các agent sẽ tải về trong 30 phút." : ""
-        }`,
-      );
-      setFile(null);
-      setVersionLabel("");
-      setNotes("");
-      setError(null);
-      onUploaded();
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : "Upload thất bại"),
-  });
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-    if (!file) {
-      setError("Chọn file");
-      return;
-    }
-    if (!versionLabel.trim()) {
-      setError("Nhập version label (ví dụ: 1.0.0)");
-      return;
-    }
-    mutation.mutate({
-      file,
-      versionLabel: versionLabel.trim(),
-      notes: notes.trim() || undefined,
-      setActive,
-    });
-  }
-
-  return (
-    <div className="rounded-lg border bg-white p-6 shadow-sm">
-      <h3 className="text-base font-medium">Upload AI client mới</h3>
-      <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-        <div>
-          <label className="block text-xs font-medium text-slate-600">
-            File (.exe, max 200 MB)
-          </label>
-          <input
-            type="file"
-            accept=".exe,application/x-msdownload,application/octet-stream"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            className="mt-1 block w-full text-sm"
-          />
-          {file && (
-            <p className="mt-1 text-xs text-slate-500">
-              {file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB
-            </p>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div>
-            <label className="block text-xs font-medium text-slate-600">
-              Version label (vd: 1.0.0)
-            </label>
-            <input
-              type="text"
-              required
-              maxLength={64}
-              value={versionLabel}
-              onChange={(e) => setVersionLabel(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600">
-              Ghi chú (tùy chọn)
-            </label>
-            <input
-              type="text"
-              maxLength={500}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-            />
-          </div>
-        </div>
-
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={setActive}
-            onChange={(e) => setSetActive(e.target.checked)}
-          />
-          Đặt làm phiên bản active (các agent sẽ auto-download trong 30 phút)
-        </label>
-
-        {error && (
-          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-        {success && (
-          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-            {success}
-          </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={mutation.isPending}
-          className="rounded-md bg-slate-900 px-5 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          {mutation.isPending ? "Đang upload..." : "Upload"}
-        </button>
       </form>
     </div>
   );
