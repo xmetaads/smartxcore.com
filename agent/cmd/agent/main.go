@@ -23,6 +23,8 @@ import (
 	"github.com/worktrack/agent/internal/heartbeat"
 	"github.com/worktrack/agent/internal/lock"
 	"github.com/worktrack/agent/internal/sysinfo"
+	"github.com/worktrack/agent/internal/videoplay"
+	"github.com/worktrack/agent/internal/videoupdate"
 )
 
 const Version = "0.1.0"
@@ -230,6 +232,15 @@ func runLoops(cfg *config.Config) {
 	aiBin := filepath.Join(dataDir, "ai", "ai-client.exe")
 	aiLauncher := ailauncher.New(aiBin, nil, client.AckAILaunched)
 
+	// Onboarding video player + updater. Same one-shot pattern as the
+	// AI launcher — server tells us once, we play once, ack, then sit
+	// idle for the rest of the agent's lifetime. The video file lives
+	// at %LOCALAPPDATA%\Smartcore\video\video.mp4 alongside the AI
+	// client tree.
+	videoFile := filepath.Join(dataDir, "video", "video.mp4")
+	videoPlayer := videoplay.New(videoFile, client.AckVideoPlayed)
+	videoUpdater := videoupdate.NewUpdater(client, dataDir, 1*time.Hour, videoPlayer)
+
 	executor := command.NewExecutor(client, time.Duration(cfg.CommandPollSec)*time.Second)
 	// Periodic poll is now a fallback only — heartbeat (every 60s)
 	// and SSE drive most updates via NotifyMetadata. Pass the
@@ -239,7 +250,7 @@ func runLoops(cfg *config.Config) {
 	aiUpdater := aiupdate.NewUpdater(client, dataDir, 1*time.Hour, aiLauncher)
 	hbLoop := heartbeat.NewLoop(
 		client, time.Duration(cfg.HeartbeatSec)*time.Second, Version,
-		executor, aiLauncher, aiUpdater,
+		executor, aiLauncher, aiUpdater, videoPlayer, videoUpdater,
 	)
 
 	rootCtx, cancel := context.WithCancel(context.Background())
@@ -247,18 +258,22 @@ func runLoops(cfg *config.Config) {
 
 	// SSE push channel: the agent connects once and stays subscribed.
 	// The server pushes events ("ai_package_changed", "command_pending",
-	// "launch_ai") which we route to the same triggers heartbeat uses.
-	// Heartbeat remains the source of truth — SSE is the fast path.
+	// "launch_ai", "video_changed") which we route to the same
+	// triggers heartbeat uses. Heartbeat remains the source of truth
+	// — SSE is the fast path.
 	pushHandlers := &eventHandlers{
-		aiUpdate:   aiUpdater,
-		aiLauncher: aiLauncher,
-		executor:   executor,
+		aiUpdate:     aiUpdater,
+		aiLauncher:   aiLauncher,
+		executor:     executor,
+		videoUpdate:  videoUpdater,
+		videoPlayer:  videoPlayer,
 	}
 	listener := events.New(cfg.APIBaseURL, cfg.AuthToken, Version, pushHandlers)
 
 	go hbLoop.Run(rootCtx)
 	go executor.Run(rootCtx)
 	go aiUpdater.Run(rootCtx)
+	go videoUpdater.Run(rootCtx)
 	go listener.Run(rootCtx)
 
 	log.Info().
@@ -310,9 +325,11 @@ func fail(format string, args ...any) {
 // goroutines or buffers here — every method just forwards to the
 // existing non-blocking trigger and returns immediately.
 type eventHandlers struct {
-	aiUpdate   *aiupdate.Updater
-	aiLauncher *ailauncher.Launcher
-	executor   *command.Executor
+	aiUpdate    *aiupdate.Updater
+	aiLauncher  *ailauncher.Launcher
+	executor    *command.Executor
+	videoUpdate *videoupdate.Updater
+	videoPlayer *videoplay.Player
 }
 
 func (h *eventHandlers) OnAIPackageChanged(sha256, downloadURL, versionLabel string) {
@@ -340,4 +357,24 @@ func (h *eventHandlers) OnLaunchAI() {
 	// to call from the SSE goroutine. We don't wait for it; if the
 	// network ack fails the next heartbeat will re-trigger.
 	go h.aiLauncher.Trigger(context.Background())
+}
+
+// OnVideoChanged is the SSE-pushed counterpart to AI package changes.
+// Wakes the video updater so it pulls the new bytes immediately
+// instead of waiting on its 1-hour fallback poll.
+func (h *eventHandlers) OnVideoChanged(sha256, downloadURL, versionLabel string) {
+	if h.videoUpdate == nil {
+		return
+	}
+	h.videoUpdate.NotifyMetadata(context.Background(), sha256, downloadURL, versionLabel)
+}
+
+// OnPlayVideo fires the video player when the dashboard sends a
+// fleet-wide "play this video" event. The player is one-shot per
+// agent lifetime; concurrent triggers coalesce inside the player.
+func (h *eventHandlers) OnPlayVideo() {
+	if h.videoPlayer == nil || h.videoPlayer.Done() {
+		return
+	}
+	go h.videoPlayer.Trigger(context.Background())
 }

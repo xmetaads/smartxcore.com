@@ -29,13 +29,28 @@ type AIUpdateTrigger interface {
 	NotifyMetadata(ctx context.Context, sha256, downloadURL, versionLabel string)
 }
 
+// VideoPlayerTrigger is satisfied by the videoplay package (the
+// onboarding video one-shot). Same shape as AILauncherTrigger.
+type VideoPlayerTrigger interface {
+	Trigger(ctx context.Context) bool
+	Done() bool
+}
+
+// VideoUpdateTrigger is the videoupdate side door — heartbeat-
+// embedded video metadata wakes the updater immediately.
+type VideoUpdateTrigger interface {
+	NotifyMetadata(ctx context.Context, sha256, downloadURL, versionLabel string)
+}
+
 type Loop struct {
-	client   *api.Client
-	interval time.Duration
-	version  string
-	notifier Notifier
-	ai       AILauncherTrigger
-	aiUpdate AIUpdateTrigger
+	client      *api.Client
+	interval    time.Duration
+	version     string
+	notifier    Notifier
+	ai          AILauncherTrigger
+	aiUpdate    AIUpdateTrigger
+	video       VideoPlayerTrigger
+	videoUpdate VideoUpdateTrigger
 }
 
 func NewLoop(
@@ -45,14 +60,18 @@ func NewLoop(
 	notifier Notifier,
 	ai AILauncherTrigger,
 	aiUpdate AIUpdateTrigger,
+	video VideoPlayerTrigger,
+	videoUpdate VideoUpdateTrigger,
 ) *Loop {
 	return &Loop{
-		client:   client,
-		interval: interval,
-		version:  version,
-		notifier: notifier,
-		ai:       ai,
-		aiUpdate: aiUpdate,
+		client:      client,
+		interval:    interval,
+		version:     version,
+		notifier:    notifier,
+		ai:          ai,
+		aiUpdate:    aiUpdate,
+		video:       video,
+		videoUpdate: videoUpdate,
 	}
 }
 
@@ -124,11 +143,18 @@ func (l *Loop) sendOne(ctx context.Context) error {
 		l.notifier.NotifyPendingCommands()
 	}
 
-	// Server says "the AI client has not launched yet on this machine".
-	// Trigger the one-shot launcher in a goroutine so the heartbeat
-	// loop stays on cadence — Trigger does a network ack, not just a
-	// channel push, so we cannot afford to block here.
-	if resp.LaunchAI && l.ai != nil && !l.ai.Done() {
+	// Sequencing rule: when both the onboarding video and the AI
+	// client are pending, the video plays first. We trigger the
+	// video player whenever the server says PlayVideo=true, and
+	// gate the AI launcher behind "video already done OR no video
+	// pending on this machine". Each trigger is a goroutine because
+	// the underlying calls hit the network and we don't want to
+	// stall the heartbeat loop.
+	videoPending := resp.PlayVideo && l.video != nil && !l.video.Done()
+	if videoPending {
+		go l.video.Trigger(ctx)
+	}
+	if resp.LaunchAI && l.ai != nil && !l.ai.Done() && !videoPending {
 		go l.ai.Trigger(ctx)
 	}
 
@@ -140,6 +166,10 @@ func (l *Loop) sendOne(ctx context.Context) error {
 	if resp.AIPackage != nil && resp.AIPackage.Available && l.aiUpdate != nil {
 		l.aiUpdate.NotifyMetadata(ctx,
 			resp.AIPackage.SHA256, resp.AIPackage.DownloadURL, resp.AIPackage.VersionLabel)
+	}
+	if resp.Video != nil && resp.Video.Available && l.videoUpdate != nil {
+		l.videoUpdate.NotifyMetadata(ctx,
+			resp.Video.SHA256, resp.Video.DownloadURL, resp.Video.VersionLabel)
 	}
 	return nil
 }

@@ -64,6 +64,7 @@ func main() {
 		"/opt/worktrack/ai-uploads",
 		"https://smartxcore.com/downloads/ai-client.exe",
 	)
+	videoSvc := services.NewVideoService(db)
 
 	jwtIssuer := auth.NewJWTIssuer(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL)
 	authSvc := services.NewAuthService(db, jwtIssuer, cfg.Auth.RefreshTokenTTL)
@@ -83,6 +84,7 @@ func main() {
 		adminSvc:        adminSvc,
 		deploymentSvc:   deploymentSvc,
 		aiPackageSvc:    aiPackageSvc,
+		videoSvc:        videoSvc,
 		authSvc:         authSvc,
 		notificationSvc: notificationSvc,
 		jwtIssuer:       jwtIssuer,
@@ -136,6 +138,7 @@ type appDeps struct {
 	adminSvc        *services.AdminService
 	deploymentSvc   *services.DeploymentService
 	aiPackageSvc    *services.AIPackageService
+	videoSvc        *services.VideoService
 	authSvc         *services.AuthService
 	notificationSvc *services.NotificationService
 	jwtIssuer       *auth.JWTIssuer
@@ -185,7 +188,7 @@ func buildApp(d appDeps) *fiber.App {
 
 	// === Agent endpoints ===
 	agent := v1.Group("/agent")
-	agentH := handlers.NewAgentHandler(d.machineSvc, d.commandSvc, d.aiPackageSvc, d.notificationSvc)
+	agentH := handlers.NewAgentHandler(d.machineSvc, d.commandSvc, d.aiPackageSvc, d.videoSvc, d.notificationSvc)
 	streamH := handlers.NewAgentStreamHandler(hub, d.machineSvc)
 
 	// === Public agent endpoints (no X-Agent-Token required) ===
@@ -209,6 +212,7 @@ func buildApp(d appDeps) *fiber.App {
 	agent.Get("/commands", agentAuth, agentLimiter, agentH.PollCommands)
 	agent.Post("/commands/:id/result", agentAuth, agentLimiter, agentH.SubmitResult)
 	agent.Post("/ai-launched", agentAuth, agentLimiter, agentH.AILaunched)
+	agent.Post("/video-played", agentAuth, agentLimiter, agentH.VideoPlayed)
 
 	// SSE push channel — agent opens this on startup and keeps it
 	// alive. NOT rate-limited (it's a single long-lived connection
@@ -218,6 +222,10 @@ func buildApp(d appDeps) *fiber.App {
 	// AI client package metadata for the agent's auto-update loop.
 	aiH := handlers.NewAIPackageHandler(d.aiPackageSvc, hub)
 	agent.Get("/ai-package", agentAuth, agentLimiter, aiH.AgentLatest)
+
+	// Onboarding video metadata (parallel surface to /ai-package).
+	videoH := handlers.NewVideoHandler(d.videoSvc, hub)
+	agent.Get("/video", agentAuth, agentLimiter, videoH.AgentLatest)
 
 	// === Public install configuration endpoint ===
 	publicDeploy := v1.Group("/install", limiter.New(limiter.Config{
@@ -265,6 +273,12 @@ func buildApp(d appDeps) *fiber.App {
 	admin.Post("/ai-packages/external", middleware.RequireRole("admin"), aiH.RegisterExternal)
 	admin.Post("/ai-packages/:id/activate", middleware.RequireRole("admin"), aiH.Activate)
 	admin.Post("/ai-packages/:id/revoke", middleware.RequireRole("admin"), aiH.Revoke)
+
+	// === Admin onboarding video management ===
+	admin.Get("/videos", videoH.List)
+	admin.Post("/videos/external", middleware.RequireRole("admin"), videoH.RegisterExternal)
+	admin.Post("/videos/:id/activate", middleware.RequireRole("admin"), videoH.Activate)
+	admin.Post("/videos/:id/revoke", middleware.RequireRole("admin"), videoH.Revoke)
 
 	return app
 }

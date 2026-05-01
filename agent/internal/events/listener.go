@@ -52,6 +52,15 @@ type Handlers interface {
 	// now" out-of-band (admin clicked the button on the dashboard).
 	// Equivalent to seeing launch_ai=true in a heartbeat response.
 	OnLaunchAI()
+
+	// OnVideoChanged fires when a new onboarding video is activated.
+	// The video updater wakes up and pulls the bytes.
+	OnVideoChanged(sha256, downloadURL, versionLabel string)
+
+	// OnPlayVideo fires when the server signals "play the video now"
+	// out-of-band (e.g. fleet-wide rollout SSE event). Equivalent to
+	// seeing play_video=true in a heartbeat response.
+	OnPlayVideo()
 }
 
 type Listener struct {
@@ -207,6 +216,16 @@ func (l *Listener) dispatch(eventType, payload string) {
 		l.handlers.OnCommandPending()
 	case "launch_ai":
 		l.handlers.OnLaunchAI()
+	case "video_changed":
+		// Same payload shape as ai_package_changed.
+		sha := jsonField(payload, "sha256")
+		url := jsonField(payload, "download_url")
+		ver := jsonField(payload, "version_label")
+		if sha != "" {
+			l.handlers.OnVideoChanged(sha, url, ver)
+		}
+	case "play_video":
+		l.handlers.OnPlayVideo()
 	default:
 		log.Debug().Str("event", eventType).Msg("sse: unknown event, ignoring")
 	}

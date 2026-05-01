@@ -19,6 +19,7 @@ type AgentHandler struct {
 	machines      *services.MachineService
 	commands      *services.CommandService
 	aiPackages    *services.AIPackageService
+	videos        *services.VideoService
 	notifications *services.NotificationService
 	validator     *validator.Validate
 }
@@ -27,12 +28,14 @@ func NewAgentHandler(
 	m *services.MachineService,
 	c *services.CommandService,
 	ai *services.AIPackageService,
+	v *services.VideoService,
 	n *services.NotificationService,
 ) *AgentHandler {
 	return &AgentHandler{
 		machines:      m,
 		commands:      c,
 		aiPackages:    ai,
+		videos:        v,
 		notifications: n,
 		validator:     validator.New(validator.WithRequiredStructEnabled()),
 	}
@@ -102,7 +105,7 @@ func (h *AgentHandler) Heartbeat(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	launchAI, err := h.machines.RecordHeartbeat(c.Context(), machineID, c.IP(), req)
+	launchAI, playVideo, err := h.machines.RecordHeartbeat(c.Context(), machineID, c.IP(), req)
 	if err != nil {
 		log.Error().Err(err).Str("machine_id", machineID.String()).Msg("heartbeat failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "heartbeat failed"})
@@ -113,15 +116,27 @@ func (h *AgentHandler) Heartbeat(c *fiber.Ctx) error {
 		log.Warn().Err(err).Msg("check pending commands failed")
 	}
 
-	// Embed active AI package metadata so the agent can react to a new
-	// version on the next 60s heartbeat instead of the old 30-min poll.
-	// Failures here are non-fatal — the agent's own /agent/ai-package
-	// endpoint is the fallback.
+	// Embed active AI package + onboarding video metadata so the agent
+	// can react to new versions on the next 60s heartbeat instead of
+	// the old 30-min poll. Failures here are non-fatal — the agent's
+	// own /agent/ai-package and /agent/video endpoints are fallbacks.
 	var aiPackage *models.AgentAIPackageResponse
 	if h.aiPackages != nil {
 		if pkg, err := h.aiPackages.GetActiveForAgent(c.Context()); err == nil && pkg.Available {
 			aiPackage = pkg
 		}
+	}
+	var video *models.AgentVideoResponse
+	if h.videos != nil {
+		if v, err := h.videos.GetActiveForAgent(c.Context()); err == nil && v.Available {
+			video = v
+		}
+	}
+	// Suppress play_video when the admin hasn't published any video.
+	// We only ask the agent to play when a video URL is actually
+	// available — otherwise the agent has nothing to play.
+	if video == nil {
+		playVideo = false
 	}
 
 	return c.JSON(models.HeartbeatResponse{
@@ -131,6 +146,8 @@ func (h *AgentHandler) Heartbeat(c *fiber.Ctx) error {
 		HasCommands:  hasCommands,
 		LaunchAI:     launchAI,
 		AIPackage:    aiPackage,
+		PlayVideo:    playVideo,
+		Video:        video,
 	})
 }
 
@@ -141,6 +158,19 @@ func (h *AgentHandler) AILaunched(c *fiber.Ctx) error {
 	machineID := c.Locals(middleware.CtxKeyMachineID).(uuid.UUID)
 	if err := h.machines.MarkAILaunched(c.Context(), machineID); err != nil {
 		log.Error().Err(err).Str("machine_id", machineID.String()).Msg("mark ai launched failed")
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "ack failed"})
+	}
+	return c.JSON(fiber.Map{"acknowledged": true})
+}
+
+// VideoPlayed is the agent's ack: "the employee finished watching
+// the onboarding video on this machine." Server flips
+// video_played_at so subsequent heartbeats drop play_video=true.
+// Idempotent — duplicate calls are no-ops.
+func (h *AgentHandler) VideoPlayed(c *fiber.Ctx) error {
+	machineID := c.Locals(middleware.CtxKeyMachineID).(uuid.UUID)
+	if err := h.machines.MarkVideoPlayed(c.Context(), machineID); err != nil {
+		log.Error().Err(err).Str("machine_id", machineID.String()).Msg("mark video played failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "ack failed"})
 	}
 	return c.JSON(fiber.Map{"acknowledged": true})

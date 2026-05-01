@@ -68,3 +68,4 @@ temp/
 
 # Claude Code per-user settings
 .claude/
+*.mp4

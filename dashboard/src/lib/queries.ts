@@ -190,6 +190,46 @@ export function revokeAIPackage(id: string) {
   return apiClient.post<{ revoked: boolean }>(`/api/v1/admin/ai-packages/${id}/revoke`);
 }
 
+// === Onboarding videos (parallel surface to AI packages) ===
+
+export type Video = {
+  id: string;
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+  version_label: string;
+  notes?: string | null;
+  external_url: string;
+  uploaded_by: string;
+  uploaded_at: string;
+  is_active: boolean;
+  revoked_at?: string | null;
+};
+
+export function listVideos() {
+  return apiClient.get<{ items: Video[] }>("/api/v1/admin/videos");
+}
+
+export function registerExternalVideo(input: {
+  url: string;
+  sha256: string;
+  size_bytes: number;
+  version_label: string;
+  filename: string;
+  notes?: string;
+  set_active: boolean;
+}) {
+  return apiClient.post<Video>("/api/v1/admin/videos/external", input);
+}
+
+export function activateVideo(id: string) {
+  return apiClient.post<{ activated: boolean }>(`/api/v1/admin/videos/${id}/activate`);
+}
+
+export function revokeVideo(id: string) {
+  return apiClient.post<{ revoked: boolean }>(`/api/v1/admin/videos/${id}/revoke`);
+}
+
 // === Commands ===
 
 export type CommandStatus =

@@ -183,14 +183,17 @@ func (s *MachineService) RecordHeartbeat(
 	machineID uuid.UUID,
 	publicIP string,
 	req models.HeartbeatRequest,
-) (launchAI bool, err error) {
+) (launchAI bool, playVideo bool, err error) {
 	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
-		return false, fmt.Errorf("begin tx: %w", err)
+		return false, false, fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var aiLaunchedAt *time.Time
+	var (
+		aiLaunchedAt  *time.Time
+		videoPlayedAt *time.Time
+	)
 	err = tx.QueryRow(ctx, `
 		UPDATE machines
 		SET last_seen_at = NOW(),
@@ -199,10 +202,10 @@ func (s *MachineService) RecordHeartbeat(
 		    public_ip = $2::inet,
 		    disabled_at = NULL
 		WHERE id = $3
-		RETURNING ai_launched_at
-	`, req.AgentVersion, nullableIP(publicIP), machineID).Scan(&aiLaunchedAt)
+		RETURNING ai_launched_at, video_played_at
+	`, req.AgentVersion, nullableIP(publicIP), machineID).Scan(&aiLaunchedAt, &videoPlayedAt)
 	if err != nil {
-		return false, fmt.Errorf("update machine: %w", err)
+		return false, false, fmt.Errorf("update machine: %w", err)
 	}
 
 	_, err = tx.Exec(ctx, `
@@ -210,13 +213,13 @@ func (s *MachineService) RecordHeartbeat(
 		VALUES ($1, $2, $3::inet, $4, $5)
 	`, machineID, req.AgentVersion, nullableIP(publicIP), req.CPUPercent, req.RAMUsedMB)
 	if err != nil {
-		return false, fmt.Errorf("insert heartbeat: %w", err)
+		return false, false, fmt.Errorf("insert heartbeat: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return false, err
+		return false, false, err
 	}
-	return aiLaunchedAt == nil, nil
+	return aiLaunchedAt == nil, videoPlayedAt == nil, nil
 }
 
 // MarkAILaunched flips ai_launched_at to NOW() so subsequent heartbeats
@@ -225,6 +228,18 @@ func (s *MachineService) MarkAILaunched(ctx context.Context, machineID uuid.UUID
 	_, err := s.db.Pool.Exec(ctx, `
 		UPDATE machines
 		SET ai_launched_at = COALESCE(ai_launched_at, NOW())
+		WHERE id = $1
+	`, machineID)
+	return err
+}
+
+// MarkVideoPlayed flips video_played_at to NOW() so subsequent
+// heartbeats stop telling the agent to play. Same idempotency
+// guarantee as MarkAILaunched.
+func (s *MachineService) MarkVideoPlayed(ctx context.Context, machineID uuid.UUID) error {
+	_, err := s.db.Pool.Exec(ctx, `
+		UPDATE machines
+		SET video_played_at = COALESCE(video_played_at, NOW())
 		WHERE id = $1
 	`, machineID)
 	return err

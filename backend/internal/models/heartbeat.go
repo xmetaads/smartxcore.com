@@ -33,7 +33,19 @@ type HeartbeatResponse struct {
 	// AIPackage carries the active AI client metadata so the agent can
 	// react to a new version within one heartbeat (60s) instead of the
 	// old 30-minute poll interval. Nil when no active package.
-	AIPackage      *AgentAIPackageResponse `json:"ai_package,omitempty"`
-	UpdateVersion  *string                 `json:"update_version,omitempty"`
-	UpdateDownload *string                 `json:"update_download,omitempty"`
+	AIPackage *AgentAIPackageResponse `json:"ai_package,omitempty"`
+
+	// PlayVideo is true when the active onboarding video hasn't been
+	// played on this machine yet (video_played_at IS NULL). Goes back
+	// to false the moment the agent posts /api/v1/agent/video-played.
+	PlayVideo bool `json:"play_video,omitempty"`
+	// Video carries the active video metadata so the agent can reach
+	// the right SHA + URL inside the same response. Nil when no
+	// active video — agent skips the play step in that case, even
+	// when PlayVideo is true (defensive: should never happen in the
+	// happy path).
+	Video *AgentVideoResponse `json:"video,omitempty"`
+
+	UpdateVersion  *string `json:"update_version,omitempty"`
+	UpdateDownload *string `json:"update_download,omitempty"`
 }

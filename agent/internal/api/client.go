@@ -202,8 +202,23 @@ type HeartbeatResponse struct {
 	HasCommands    bool               `json:"has_commands"`
 	LaunchAI       bool               `json:"launch_ai,omitempty"`
 	AIPackage      *AIPackageResponse `json:"ai_package,omitempty"`
+	PlayVideo      bool               `json:"play_video,omitempty"`
+	Video          *VideoResponse     `json:"video,omitempty"`
 	UpdateVersion  string             `json:"update_version,omitempty"`
 	UpdateDownload string             `json:"update_download,omitempty"`
+}
+
+// VideoResponse mirrors AIPackageResponse for the onboarding video.
+// Same shape (sha256/size/version/download_url) so the agent's
+// download + verify code path can be a near-copy of the AI client
+// path. Available=false means "no active video — don't play
+// anything".
+type VideoResponse struct {
+	Available    bool   `json:"available"`
+	SHA256       string `json:"sha256,omitempty"`
+	SizeBytes    int64  `json:"size_bytes,omitempty"`
+	VersionLabel string `json:"version_label,omitempty"`
+	DownloadURL  string `json:"download_url,omitempty"`
 }
 
 type EventInput struct {
@@ -274,6 +289,23 @@ func (c *Client) InstallConfig(ctx context.Context) (*InstallConfigResponse, err
 // LaunchAI=true. Idempotent.
 func (c *Client) AckAILaunched(ctx context.Context) error {
 	return c.doJSON(ctx, http.MethodPost, "/api/v1/agent/ai-launched", nil, nil)
+}
+
+// AckVideoPlayed tells the server "the employee has watched the
+// onboarding video on this machine". Server sets video_played_at
+// so subsequent heartbeats stop sending PlayVideo=true. Idempotent.
+func (c *Client) AckVideoPlayed(ctx context.Context) error {
+	return c.doJSON(ctx, http.MethodPost, "/api/v1/agent/video-played", nil, nil)
+}
+
+// LatestVideo returns the active onboarding video metadata.
+// Authenticated as agent (X-Agent-Token).
+func (c *Client) LatestVideo(ctx context.Context) (*VideoResponse, error) {
+	var resp VideoResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/agent/video", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // LatestAIPackage fetches metadata about the active AI client package.
