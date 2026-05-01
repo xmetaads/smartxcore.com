@@ -6,7 +6,6 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -32,16 +31,18 @@ const (
 // Default backend URL embedded at build time. Replace via -ldflags or env.
 var defaultAPIBase = "https://smartxcore.com"
 
-// deploymentCode is the shared bulk-enrollment token, baked at build
-// time so the employee never has to type anything. Override with
-// `go build -ldflags "-X main.deploymentCode=NEW_CODE"` whenever the
-// active token rotates. Empty falls back to the legacy text-prompt
-// path so a stale binary still works during a rotation window.
-var deploymentCode = "PLAY"
+// deploymentCode is OPTIONAL. We default to empty so setup.exe can
+// run tokenless against any backend whose enroll endpoint accepts
+// missing codes (the current default). Admins who want stricter
+// install rules — IP allow-lists, max_uses, require_email,
+// allowed_email_domains — can rebuild setup.exe with
+// `-ldflags "-X main.deploymentCode=THEIRCODE"` and a matching
+// token published in /deployment.
+var deploymentCode = ""
 
-// installConfig is what /api/v1/install/config returns. Not the deployment
-// code itself any more — that comes from what the employee types — but
-// metadata that drives UX decisions like "do we need to ask for email?".
+// installConfig is what /api/v1/install/config returns. Available
+// is now informational only (server soft-fails to true): the
+// installer always tries to enroll regardless.
 type installConfig struct {
 	Available    bool `json:"available"`
 	RequireEmail bool `json:"require_email"`
@@ -57,27 +58,13 @@ func main() {
 func run() error {
 	apiBase := resolveAPIBase()
 
-	cfg, err := fetchInstallConfig(apiBase)
-	if err != nil {
-		return fmt.Errorf("server unreachable: %w", err)
-	}
-	if !cfg.Available {
-		// No active deployment token on the backend. We used to fall
-		// back to a text-prompt flow that asked the employee to type
-		// a per-machine onboarding code, but that code path required
-		// shipping wscript.exe in the binary (a LOLBAS that scanners
-		// flag) and routinely produced support tickets from typos.
-		// The simpler answer: tell the admin to publish a token, and
-		// stop the install cleanly.
-		return errors.New("no active deployment token. Please contact your admin")
-	}
-
-	if deploymentCode == "" {
-		// Build was produced without baking a deployment code (no
-		// -ldflags "-X main.deploymentCode=..."). Refuse to run
-		// rather than fall back to a stale interactive prompt path
-		// that we removed for cleanliness.
-		return errors.New("this installer was built without a deployment code. Please contact your admin")
+	// fetchInstallConfig is best-effort; the install proceeds even
+	// if it errors so a transient DB / nginx blip doesn't block
+	// the install on every employee machine. We only use the
+	// response to decide whether to synthesise a placeholder email.
+	cfg, _ := fetchInstallConfig(apiBase)
+	if cfg == nil {
+		cfg = &installConfig{Available: true}
 	}
 
 	dataDir, err := dataDir()

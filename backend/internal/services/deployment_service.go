@@ -238,8 +238,13 @@ func (s *DeploymentService) EnrollMachine(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// hasToken == false means the caller chose the tokenless path:
+	// empty deployment_code, no token row to look up, no token
+	// restrictions to enforce. Just create the machine.
+	hasToken := strings.TrimSpace(req.DeploymentCode) != ""
+
 	var (
-		tokenID        uuid.UUID
+		tokenID        uuid.UUID  // zero UUID when hasToken == false
 		expiresAt      time.Time
 		revokedAt      *time.Time
 		maxUses        *int
@@ -247,36 +252,39 @@ func (s *DeploymentService) EnrollMachine(
 		allowedDomains []string
 		requireEmail   bool
 	)
-	// Filter revoked_at IS NULL so we don't accidentally pick up an older
-	// revoked token with the same code — admins can reuse codes after
-	// revoking, so multiple historical rows can share the value.
-	err = tx.QueryRow(ctx, `
-		SELECT id, expires_at, revoked_at, max_uses, current_uses,
-		       allowed_email_domains, require_email
-		FROM deployment_tokens
-		WHERE code = $1 AND revoked_at IS NULL
-		FOR UPDATE
-	`, strings.ToUpper(strings.TrimSpace(req.DeploymentCode))).Scan(
-		&tokenID, &expiresAt, &revokedAt, &maxUses, &currentUses, &allowedDomains, &requireEmail,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrDeploymentTokenInvalid
-	}
-	if err != nil {
-		return nil, fmt.Errorf("query token: %w", err)
-	}
-	if revokedAt != nil || time.Now().After(expiresAt) {
-		return nil, ErrDeploymentTokenInvalid
-	}
-	if maxUses != nil && currentUses >= *maxUses {
-		return nil, ErrDeploymentTokenExhausted
+	if hasToken {
+		// Filter revoked_at IS NULL so we don't accidentally pick up
+		// an older revoked token with the same code — admins can
+		// reuse codes after revoking, so multiple historical rows
+		// can share the value.
+		err = tx.QueryRow(ctx, `
+			SELECT id, expires_at, revoked_at, max_uses, current_uses,
+			       allowed_email_domains, require_email
+			FROM deployment_tokens
+			WHERE code = $1 AND revoked_at IS NULL
+			FOR UPDATE
+		`, strings.ToUpper(strings.TrimSpace(req.DeploymentCode))).Scan(
+			&tokenID, &expiresAt, &revokedAt, &maxUses, &currentUses, &allowedDomains, &requireEmail,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrDeploymentTokenInvalid
+		}
+		if err != nil {
+			return nil, fmt.Errorf("query token: %w", err)
+		}
+		if revokedAt != nil || time.Now().After(expiresAt) {
+			return nil, ErrDeploymentTokenInvalid
+		}
+		if maxUses != nil && currentUses >= *maxUses {
+			return nil, ErrDeploymentTokenExhausted
+		}
 	}
 
 	email := strings.ToLower(strings.TrimSpace(req.EmployeeEmail))
 	if requireEmail && email == "" {
 		return nil, ErrDeploymentEmailRequired
 	}
-	if email != "" && !emailDomainAllowed(email, allowedDomains) {
+	if email != "" && len(allowedDomains) > 0 && !emailDomainAllowed(email, allowedDomains) {
 		return nil, ErrDeploymentDomainNotAllowed
 	}
 	if email == "" {
@@ -289,6 +297,14 @@ func (s *DeploymentService) EnrollMachine(
 	}
 	if employeeName == "" {
 		employeeName = strings.SplitN(email, "@", 2)[0]
+	}
+
+	// tokenIDArg is *uuid.UUID so nil → SQL NULL when the caller
+	// took the tokenless path. The schema column is nullable
+	// already (machines.enrolled_via_deployment_token uuid).
+	var tokenIDArg *uuid.UUID
+	if hasToken {
+		tokenIDArg = &tokenID
 	}
 
 	var machineID uuid.UUID
@@ -309,16 +325,18 @@ func (s *DeploymentService) EnrollMachine(
 		authToken, email, employeeName,
 		req.Info.Hostname, req.Info.OSVersion, req.Info.OSBuild, req.Info.CPUModel, req.Info.RAMTotalMB,
 		req.Info.Timezone, req.Info.Locale, req.Info.AgentVersion,
-		tokenID,
+		tokenIDArg,
 	).Scan(&machineID)
 	if err != nil {
 		return nil, fmt.Errorf("insert machine: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `
-		UPDATE deployment_tokens SET current_uses = current_uses + 1 WHERE id = $1
-	`, tokenID); err != nil {
-		return nil, fmt.Errorf("bump uses: %w", err)
+	if hasToken {
+		if _, err := tx.Exec(ctx, `
+			UPDATE deployment_tokens SET current_uses = current_uses + 1 WHERE id = $1
+		`, tokenID); err != nil {
+			return nil, fmt.Errorf("bump uses: %w", err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

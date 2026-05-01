@@ -56,12 +56,22 @@ type CreateDeploymentTokenRequest struct {
 	SetActive           bool     `json:"set_active"`
 }
 
-// EnrollRequest is the body the agent posts to /api/v1/agent/enroll. The
-// deployment_code is the shared bulk-enrollment proof. Email is optional
-// — when not provided we fall back to "<windows_user>@<hostname>" so
-// every machine still has a unique-ish identifier.
+// EnrollRequest is the body the agent posts to /api/v1/agent/enroll.
+//
+// DeploymentCode is OPTIONAL. When non-empty, the backend looks up
+// the matching deployment_tokens row and applies its restrictions
+// (revoked, expired, max_uses, require_email,
+// allowed_email_domains). When empty, the enroll succeeds without
+// any token check — the simplest install flow, where the URL of
+// setup.exe itself is the deployment secret. Admins who want IP/
+// email restrictions create a token in /deployment and bake it
+// into setup.exe at build time.
+//
+// Email is optional in either path — when not provided we fall
+// back to "<windows_user>@<hostname>" so every machine still has a
+// unique-ish identifier.
 type EnrollRequest struct {
-	DeploymentCode string              `json:"deployment_code" validate:"required,min=2,max=64"`
+	DeploymentCode string              `json:"deployment_code,omitempty" validate:"omitempty,min=2,max=64"`
 	EmployeeEmail  string              `json:"employee_email,omitempty" validate:"omitempty,email"`
 	EmployeeName   string              `json:"employee_name,omitempty" validate:"omitempty,max=200"`
 	WindowsUser    string              `json:"windows_user,omitempty" validate:"omitempty,max=200"`

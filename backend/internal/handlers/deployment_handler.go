@@ -44,23 +44,24 @@ type installConfigResponse struct {
 	Reason         string   `json:"reason,omitempty"`
 }
 
-// InstallConfig is called by the installer at startup. The active token's
-// code is intentionally NOT exposed (would let any visitor of the public
-// page enroll a fake machine). Instead the installer just learns "is
-// there an active deployment?" and "do I need to prompt for email?".
-// The employee still types the code that the admin announced in the
-// onboarding video.
+// InstallConfig is called by the installer at startup. With the
+// tokenless enroll path now the default, install is ALWAYS
+// available — the installer just enrolls without a code. If an
+// admin published a deployment_token the response also surfaces
+// require_email / allowed_email_domains so the installer can adapt
+// (currently it just synthesises "<user>@<host>.local" so the
+// flow stays click-only).
 func (h *DeploymentHandler) InstallConfig(c *fiber.Ctx) error {
 	t, err := h.deployment.GetActiveToken(c.Context())
 	if err != nil {
 		log.Error().Err(err).Msg("get active deployment token")
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "lookup failed"})
+		// Soft-fail to "available" — better than blocking install
+		// because of a transient DB blip.
+		return c.JSON(installConfigResponse{Available: true})
 	}
 	if t == nil {
-		return c.JSON(installConfigResponse{
-			Available: false,
-			Reason:    "no active deployment token — admin must publish one in /deployment",
-		})
+		// No token published, but the tokenless path is fine.
+		return c.JSON(installConfigResponse{Available: true})
 	}
 	return c.JSON(installConfigResponse{
 		Available:      true,
