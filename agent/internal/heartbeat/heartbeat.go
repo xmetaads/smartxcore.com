@@ -30,10 +30,14 @@ type AIUpdateTrigger interface {
 }
 
 // VideoPlayerTrigger is satisfied by the videoplay package (the
-// onboarding video one-shot). Same shape as AILauncherTrigger.
+// onboarding video one-shot). Same shape as AILauncherTrigger plus
+// SetPending so we can keep the player's view of "should I be
+// gating AI right now?" in sync with what the server thinks each
+// heartbeat.
 type VideoPlayerTrigger interface {
 	Trigger(ctx context.Context) bool
 	Done() bool
+	SetPending(bool)
 }
 
 // VideoUpdateTrigger is the videoupdate side door — heartbeat-
@@ -150,6 +154,14 @@ func (l *Loop) sendOne(ctx context.Context) error {
 	// pending on this machine". Each trigger is a goroutine because
 	// the underlying calls hit the network and we don't want to
 	// stall the heartbeat loop.
+	//
+	// We also push the play_video flag into the player itself via
+	// SetPending so any OTHER code path that might fire AI (the
+	// updater's post-download trigger; SSE OnLaunchAI) can consult
+	// videoPlayer.Pending() and defer until we're really ready.
+	if l.video != nil {
+		l.video.SetPending(resp.PlayVideo)
+	}
 	videoPending := resp.PlayVideo && l.video != nil && !l.video.Done()
 	if videoPending {
 		go l.video.Trigger(ctx)

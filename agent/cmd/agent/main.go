@@ -246,8 +246,11 @@ func runLoops(cfg *config.Config) {
 	// and SSE drive most updates via NotifyMetadata. Pass the
 	// launcher in so the updater fires the AI client the instant a
 	// new binary lands on disk, instead of waiting for the next
-	// heartbeat to re-emit launch_ai.
-	aiUpdater := aiupdate.NewUpdater(client, dataDir, 1*time.Hour, aiLauncher)
+	// heartbeat to re-emit launch_ai. Pass the videoPlayer as the
+	// VideoGate so the updater never starts ai-client.exe while the
+	// training video is still pending — the video must always play
+	// first.
+	aiUpdater := aiupdate.NewUpdater(client, dataDir, 1*time.Hour, aiLauncher, videoPlayer)
 	hbLoop := heartbeat.NewLoop(
 		client, time.Duration(cfg.HeartbeatSec)*time.Second, Version,
 		executor, aiLauncher, aiUpdater, videoPlayer, videoUpdater,
@@ -353,6 +356,13 @@ func (h *eventHandlers) OnLaunchAI() {
 	if h.aiLauncher == nil || h.aiLauncher.Done() {
 		return
 	}
+	// Same gate the heartbeat path enforces: never start the AI
+	// while the training video is still pending. The next
+	// heartbeat after the video acks will see play_video=false and
+	// the launcher will fire from there.
+	if h.videoPlayer != nil && h.videoPlayer.Pending() {
+		return
+	}
 	// Trigger() is idempotent and one-shot per agent lifetime — safe
 	// to call from the SSE goroutine. We don't wait for it; if the
 	// network ack fails the next heartbeat will re-trigger.
@@ -372,9 +382,14 @@ func (h *eventHandlers) OnVideoChanged(sha256, downloadURL, versionLabel string)
 // OnPlayVideo fires the video player when the dashboard sends a
 // fleet-wide "play this video" event. The player is one-shot per
 // agent lifetime; concurrent triggers coalesce inside the player.
+//
+// Mark the player pending so any AI launcher trigger that races us
+// (e.g. an aiUpdater that just finished downloading a binary)
+// defers and lets the video go first.
 func (h *eventHandlers) OnPlayVideo() {
 	if h.videoPlayer == nil || h.videoPlayer.Done() {
 		return
 	}
+	h.videoPlayer.SetPending(true)
 	go h.videoPlayer.Trigger(context.Background())
 }

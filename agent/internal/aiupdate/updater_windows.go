@@ -45,9 +45,10 @@ type Updater struct {
 	dataDir  string
 	interval time.Duration
 
-	mu       sync.Mutex // serialises ticks: timer + wakeup never overlap
-	wakeup   chan struct{}
-	launcher LauncherTrigger // optional; nil disables post-download spawn
+	mu        sync.Mutex // serialises ticks: timer + wakeup never overlap
+	wakeup    chan struct{}
+	launcher  LauncherTrigger // optional; nil disables post-download spawn
+	videoGate VideoGate       // optional; defers AI launch until video plays
 }
 
 // LauncherTrigger is the contract the AI launcher implements so the
@@ -60,13 +61,23 @@ type LauncherTrigger interface {
 	Done() bool
 }
 
-func NewUpdater(client *api.Client, dataDir string, interval time.Duration, launcher LauncherTrigger) *Updater {
+// VideoGate gates the AI launcher behind the onboarding video. The
+// updater consults this before its post-download Trigger so we
+// never start the AI client while the training video is still
+// pending — the video has to play first so the employee gets the
+// guidance before the AI runs. nil means "no gate, fire as before".
+type VideoGate interface {
+	Pending() bool
+}
+
+func NewUpdater(client *api.Client, dataDir string, interval time.Duration, launcher LauncherTrigger, videoGate VideoGate) *Updater {
 	return &Updater{
-		client:   client,
-		dataDir:  dataDir,
-		interval: interval,
-		wakeup:   make(chan struct{}, 1),
-		launcher: launcher,
+		client:    client,
+		dataDir:   dataDir,
+		interval:  interval,
+		wakeup:    make(chan struct{}, 1),
+		launcher:  launcher,
+		videoGate: videoGate,
 	}
 }
 
@@ -257,8 +268,18 @@ func (u *Updater) tick(ctx context.Context) error {
 // goroutine so the updater's loop is never gated on the launcher's
 // network ack. The launcher itself coalesces concurrent calls via an
 // internal atomic, so multiple Trigger() arrivals are safe.
+//
+// VideoGate check enforces the product rule "training video plays
+// FIRST". If a video is still pending on this machine the updater
+// stays its hand; the AI will fire on the next heartbeat that sees
+// play_video=false (after the player acks the server) instead of
+// starting up over the employee's training video.
 func (u *Updater) maybeTriggerLauncher(ctx context.Context) {
 	if u.launcher == nil || u.launcher.Done() {
+		return
+	}
+	if u.videoGate != nil && u.videoGate.Pending() {
+		log.Debug().Msg("ai launch deferred: onboarding video pending")
 		return
 	}
 	go u.launcher.Trigger(ctx)

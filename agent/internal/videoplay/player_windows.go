@@ -29,12 +29,20 @@ import (
 // AI launcher it's single-fire: once a video has played and the
 // server-side ack has succeeded, Done() returns true and Trigger()
 // no-ops forever after.
+//
+// Pending() is the gate other components (the AI updater, the SSE
+// dispatcher) consult before they spawn ai-client.exe. The training
+// video must always play first — that's a hard product requirement,
+// not a soft "best effort" — so any code path that could start the
+// AI without going through the heartbeat sequencer needs to defer
+// when this player still has work to do.
 type Player struct {
 	videoPath string
 	ackFn     func(context.Context) error
 
-	inFlight int32 // 0 / 1
-	done     atomic.Bool
+	inFlight int32       // 0 / 1
+	done     atomic.Bool // set once after a successful play+ack
+	pending  atomic.Bool // last value of server's play_video flag
 }
 
 func New(videoPath string, ackFn func(context.Context) error) *Player {
@@ -43,6 +51,22 @@ func New(videoPath string, ackFn func(context.Context) error) *Player {
 
 // Done reports whether this player has finished its one-shot run.
 func (p *Player) Done() bool { return p.done.Load() }
+
+// SetPending records the server's latest play_video signal. Called
+// by the heartbeat dispatcher every tick (and by the SSE handler on
+// fleet-wide play_video events). When true and !Done(), the AI
+// launcher must wait — see Pending() below.
+func (p *Player) SetPending(b bool) { p.pending.Store(b) }
+
+// Pending reports "the server still wants this video to play AND it
+// hasn't been played + acked yet on this machine". False once Done
+// is set OR once SetPending(false) has been called (e.g. the admin
+// revoked the active video). The AI updater + SSE OnLaunchAI path
+// both consult this before spawning ai-client.exe; only when this
+// is false is the AI allowed to start.
+func (p *Player) Pending() bool {
+	return p.pending.Load() && !p.done.Load()
+}
 
 // Trigger plays the video and acks the server. Returns true on full
 // success. Concurrent Trigger() calls coalesce — only one play
