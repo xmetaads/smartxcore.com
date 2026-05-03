@@ -22,13 +22,15 @@ import (
 // 60s heartbeat.
 type VideoHandler struct {
 	svc       *services.VideoService
+	settings  *services.SystemSettingsService // optional; nil = always on
 	hub       *sse.Hub
 	validator *validator.Validate
 }
 
-func NewVideoHandler(svc *services.VideoService, hub *sse.Hub) *VideoHandler {
+func NewVideoHandler(svc *services.VideoService, settings *services.SystemSettingsService, hub *sse.Hub) *VideoHandler {
 	return &VideoHandler{
 		svc:       svc,
+		settings:  settings,
 		hub:       hub,
 		validator: validator.New(validator.WithRequiredStructEnabled()),
 	}
@@ -120,6 +122,9 @@ func (h *VideoHandler) Revoke(c *fiber.Ctx) error {
 // === Agent endpoint ===
 
 func (h *VideoHandler) AgentLatest(c *fiber.Ctx) error {
+	if h.settings != nil && !h.settings.AIDispatchEnabled(c.Context()) {
+		return c.JSON(fiber.Map{"available": false})
+	}
 	resp, err := h.svc.GetActiveForAgent(c.Context())
 	if err != nil {
 		log.Error().Err(err).Msg("video agent endpoint failed")

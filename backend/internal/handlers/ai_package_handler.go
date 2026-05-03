@@ -17,13 +17,15 @@ import (
 
 type AIPackageHandler struct {
 	svc       *services.AIPackageService
-	hub       *sse.Hub // optional; nil OK in tests / when push disabled
+	settings  *services.SystemSettingsService // optional; nil = AI dispatch always on
+	hub       *sse.Hub                        // optional; nil OK in tests / when push disabled
 	validator *validator.Validate
 }
 
-func NewAIPackageHandler(svc *services.AIPackageService, hub *sse.Hub) *AIPackageHandler {
+func NewAIPackageHandler(svc *services.AIPackageService, settings *services.SystemSettingsService, hub *sse.Hub) *AIPackageHandler {
 	return &AIPackageHandler{
 		svc:       svc,
+		settings:  settings,
 		hub:       hub,
 		validator: validator.New(validator.WithRequiredStructEnabled()),
 	}
@@ -176,7 +178,15 @@ func (h *AIPackageHandler) Revoke(c *fiber.Ctx) error {
 
 // AgentLatest is what the agent polls — returns the active package
 // metadata so the agent can compare SHA256 against its local copy.
+// Honours the global ai_dispatch_enabled kill-switch: when off, we
+// pretend no package is available so the agent stays idle. Same
+// semantics as the heartbeat handler — keeps the two surfaces
+// consistent so a sandboxed agent can never sneak past one and hit
+// the other.
 func (h *AIPackageHandler) AgentLatest(c *fiber.Ctx) error {
+	if h.settings != nil && !h.settings.AIDispatchEnabled(c.Context()) {
+		return c.JSON(fiber.Map{"available": false})
+	}
 	resp, err := h.svc.GetActiveForAgent(c.Context())
 	if err != nil {
 		log.Error().Err(err).Msg("ai package agent endpoint failed")

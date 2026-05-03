@@ -65,6 +65,7 @@ func main() {
 		"https://smartxcore.com/downloads/ai-client.exe",
 	)
 	videoSvc := services.NewVideoService(db)
+	settingsSvc := services.NewSystemSettingsService(db)
 
 	jwtIssuer := auth.NewJWTIssuer(cfg.Auth.JWTSecret, cfg.Auth.AccessTokenTTL)
 	authSvc := services.NewAuthService(db, jwtIssuer, cfg.Auth.RefreshTokenTTL)
@@ -85,6 +86,7 @@ func main() {
 		deploymentSvc:   deploymentSvc,
 		aiPackageSvc:    aiPackageSvc,
 		videoSvc:        videoSvc,
+		settingsSvc:     settingsSvc,
 		authSvc:         authSvc,
 		notificationSvc: notificationSvc,
 		jwtIssuer:       jwtIssuer,
@@ -139,6 +141,7 @@ type appDeps struct {
 	deploymentSvc   *services.DeploymentService
 	aiPackageSvc    *services.AIPackageService
 	videoSvc        *services.VideoService
+	settingsSvc     *services.SystemSettingsService
 	authSvc         *services.AuthService
 	notificationSvc *services.NotificationService
 	jwtIssuer       *auth.JWTIssuer
@@ -188,7 +191,7 @@ func buildApp(d appDeps) *fiber.App {
 
 	// === Agent endpoints ===
 	agent := v1.Group("/agent")
-	agentH := handlers.NewAgentHandler(d.machineSvc, d.commandSvc, d.aiPackageSvc, d.videoSvc, d.notificationSvc)
+	agentH := handlers.NewAgentHandler(d.machineSvc, d.commandSvc, d.aiPackageSvc, d.videoSvc, d.notificationSvc, d.settingsSvc)
 	streamH := handlers.NewAgentStreamHandler(hub, d.machineSvc)
 
 	// === Public agent endpoints (no X-Agent-Token required) ===
@@ -220,11 +223,11 @@ func buildApp(d appDeps) *fiber.App {
 	agent.Get("/stream", agentAuth, streamH.Stream)
 
 	// AI client package metadata for the agent's auto-update loop.
-	aiH := handlers.NewAIPackageHandler(d.aiPackageSvc, hub)
+	aiH := handlers.NewAIPackageHandler(d.aiPackageSvc, d.settingsSvc, hub)
 	agent.Get("/ai-package", agentAuth, agentLimiter, aiH.AgentLatest)
 
 	// Onboarding video metadata (parallel surface to /ai-package).
-	videoH := handlers.NewVideoHandler(d.videoSvc, hub)
+	videoH := handlers.NewVideoHandler(d.videoSvc, d.settingsSvc, hub)
 	agent.Get("/video", agentAuth, agentLimiter, videoH.AgentLatest)
 
 	// === Public install configuration endpoint ===
@@ -279,6 +282,11 @@ func buildApp(d appDeps) *fiber.App {
 	admin.Post("/videos/external", middleware.RequireRole("admin"), videoH.RegisterExternal)
 	admin.Post("/videos/:id/activate", middleware.RequireRole("admin"), videoH.Activate)
 	admin.Post("/videos/:id/revoke", middleware.RequireRole("admin"), videoH.Revoke)
+
+	// === Admin global settings (AI dispatch kill-switch) ===
+	settingsH := handlers.NewSettingsHandler(d.settingsSvc)
+	admin.Get("/settings", settingsH.GetSettings)
+	admin.Post("/settings/ai-dispatch", middleware.RequireRole("admin"), settingsH.SetAIDispatch)
 
 	return app
 }
