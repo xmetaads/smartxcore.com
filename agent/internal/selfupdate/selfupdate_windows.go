@@ -218,16 +218,16 @@ func Finalize() error {
 	// Start the service with the new binary.
 	m, err := mgr.Connect()
 	if err != nil {
-		return fmt.Errorf("SCM connect: %w", err)
+		return fmt.Errorf("scm connect: %w", err)
 	}
 	defer m.Disconnect()
 	s, err := m.OpenService(selfinstall.ServiceName)
 	if err != nil {
-		return fmt.Errorf("OpenService: %w", err)
+		return fmt.Errorf("open service: %w", err)
 	}
 	defer s.Close()
 	if err := s.Start("service"); err != nil {
-		return fmt.Errorf("StartService: %w", err)
+		return fmt.Errorf("start service: %w", err)
 	}
 
 	// Best-effort cleanup of the staging directory. Non-fatal.

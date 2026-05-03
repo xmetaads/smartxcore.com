@@ -178,7 +178,7 @@ func ElevateAndExit(args []string) error {
 	}
 
 	if err := windows.ShellExecute(0, verbPtr, exePtr, paramsPtr, nil, windows.SW_NORMAL); err != nil {
-		return fmt.Errorf("ShellExecute runas: %w", err)
+		return fmt.Errorf("shellexecute runas: %w", err)
 	}
 	os.Exit(0)
 	return nil // unreachable
@@ -264,7 +264,7 @@ func Uninstall() error {
 func upsertService(imagePath string) error {
 	m, err := mgr.Connect()
 	if err != nil {
-		return fmt.Errorf("SCM connect: %w", err)
+		return fmt.Errorf("scm connect: %w", err)
 	}
 	defer m.Disconnect()
 
@@ -284,7 +284,7 @@ func upsertService(imagePath string) error {
 		// image path.
 		defer s.Close()
 		if err := s.UpdateConfig(cfg); err != nil {
-			return fmt.Errorf("UpdateConfig: %w", err)
+			return fmt.Errorf("update service config: %w", err)
 		}
 		return nil
 	}
@@ -292,7 +292,7 @@ func upsertService(imagePath string) error {
 	// Create fresh.
 	s, err = m.CreateService(ServiceName, imagePath, cfg, "service")
 	if err != nil {
-		return fmt.Errorf("CreateService: %w", err)
+		return fmt.Errorf("create service: %w", err)
 	}
 	defer s.Close()
 
@@ -313,19 +313,19 @@ func upsertService(imagePath string) error {
 func startServiceIfStopped() error {
 	m, err := mgr.Connect()
 	if err != nil {
-		return fmt.Errorf("SCM connect: %w", err)
+		return fmt.Errorf("scm connect: %w", err)
 	}
 	defer m.Disconnect()
 
 	s, err := m.OpenService(ServiceName)
 	if err != nil {
-		return fmt.Errorf("OpenService: %w", err)
+		return fmt.Errorf("open service: %w", err)
 	}
 	defer s.Close()
 
 	st, err := s.Query()
 	if err != nil {
-		return fmt.Errorf("Query: %w", err)
+		return fmt.Errorf("query service status: %w", err)
 	}
 	if st.State == svc.Running || st.State == svc.StartPending {
 		return nil
@@ -335,7 +335,7 @@ func startServiceIfStopped() error {
 		// Already-running races back to ERROR_SERVICE_ALREADY_RUNNING
 		// which we treat as success.
 		if !errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
-			return fmt.Errorf("Start: %w", err)
+			return fmt.Errorf("start service: %w", err)
 		}
 	}
 	return nil
@@ -347,7 +347,7 @@ func startServiceIfStopped() error {
 func stopServiceIfRunning() error {
 	m, err := mgr.Connect()
 	if err != nil {
-		return fmt.Errorf("SCM connect: %w", err)
+		return fmt.Errorf("scm connect: %w", err)
 	}
 	defer m.Disconnect()
 
@@ -369,7 +369,7 @@ func stopServiceIfRunning() error {
 		// Not-running races give ERROR_SERVICE_NOT_ACTIVE which is
 		// fine — we wanted it stopped.
 		if !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
-			return fmt.Errorf("Control(Stop): %w", err)
+			return fmt.Errorf("send stop control: %w", err)
 		}
 	}
 
@@ -391,7 +391,7 @@ func stopServiceIfRunning() error {
 func stopAndDeleteService() error {
 	m, err := mgr.Connect()
 	if err != nil {
-		return fmt.Errorf("SCM connect: %w", err)
+		return fmt.Errorf("scm connect: %w", err)
 	}
 	defer m.Disconnect()
 
@@ -404,7 +404,7 @@ func stopAndDeleteService() error {
 	_ = stopServiceIfRunning()
 
 	if err := s.Delete(); err != nil {
-		return fmt.Errorf("Delete: %w", err)
+		return fmt.Errorf("delete service: %w", err)
 	}
 	return nil
 }
@@ -439,7 +439,7 @@ func copyFile(src, dst string) error {
 		0, 0, 0, 0,
 	)
 	if r1 == 0 {
-		return fmt.Errorf("CopyFileExW: %v", callErr)
+		return fmt.Errorf("copy file: %v", callErr)
 	}
 	return nil
 }

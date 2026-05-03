@@ -42,7 +42,7 @@ func AcquireSingleton(name string) error {
 	// runtime making other syscalls in between.
 	r, _, lastErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(pName)))
 	if r == 0 {
-		return fmt.Errorf("CreateMutexW failed: %v", lastErr)
+		return fmt.Errorf("createmutexw failed: %v", lastErr)
 	}
 	if errno, ok := lastErr.(syscall.Errno); ok && uintptr(errno) == errorAlreadyExists {
 		return ErrAlreadyRunning

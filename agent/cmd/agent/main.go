@@ -197,7 +197,7 @@ func enrollIfNeeded() error {
 		AgentVersion:    Version,
 	})
 	if err != nil {
-		return fmt.Errorf("POST /agent/enroll: %w", err)
+		return fmt.Errorf("post /agent/enroll: %w", err)
 	}
 
 	if err := mgr.UpdateRegistration(resp.MachineID, resp.AuthToken, apiBaseURL); err != nil {

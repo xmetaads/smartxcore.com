@@ -163,7 +163,7 @@ func openAndWait(ctx context.Context, path string) error {
 
 	r1, _, lastErr := procShellExec.Call(uintptr(unsafe.Pointer(&info)))
 	if r1 == 0 {
-		return fmt.Errorf("ShellExecuteExW: %v", lastErr)
+		return fmt.Errorf("shellexecuteexw: %v", lastErr)
 	}
 
 	// Some apps (UWP wrappers like Movies & TV) launch a host process
@@ -207,7 +207,7 @@ func openAndWait(ctx context.Context, path string) error {
 		case 0x102: // WAIT_TIMEOUT — keep polling
 			continue
 		default:
-			return fmt.Errorf("WaitForSingleObject: code %d", r)
+			return fmt.Errorf("waitforsingleobject: code %d", r)
 		}
 	}
 }
