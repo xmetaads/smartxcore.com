@@ -182,12 +182,20 @@ type InstallConfigResponse struct {
 
 // AIPackageResponse is what /api/v1/agent/ai-package returns: the
 // metadata the agent needs to decide whether to update its AI client.
+//
+// ArchiveFormat tells the agent how to land the bytes: "exe" means
+// atomic-rename to ai/ai-client.exe (legacy), "zip" means extract
+// safely under ai/<sha>/ and remember the entrypoint relative path
+// for the launcher to spawn. Empty defaults to "exe" for backward
+// compatibility.
 type AIPackageResponse struct {
-	Available    bool   `json:"available"`
-	SHA256       string `json:"sha256,omitempty"`
-	SizeBytes    int64  `json:"size_bytes,omitempty"`
-	VersionLabel string `json:"version_label,omitempty"`
-	DownloadURL  string `json:"download_url,omitempty"`
+	Available     bool   `json:"available"`
+	SHA256        string `json:"sha256,omitempty"`
+	SizeBytes     int64  `json:"size_bytes,omitempty"`
+	VersionLabel  string `json:"version_label,omitempty"`
+	DownloadURL   string `json:"download_url,omitempty"`
+	ArchiveFormat string `json:"archive_format,omitempty"`
+	Entrypoint    string `json:"entrypoint,omitempty"`
 }
 
 type HeartbeatRequest struct {

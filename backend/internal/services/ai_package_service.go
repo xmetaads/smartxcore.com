@@ -109,16 +109,18 @@ func (s *AIPackageService) Upload(
 
 	var pkg models.AIPackage
 	err = tx.QueryRow(ctx, `
-		INSERT INTO ai_packages (filename, sha256, size_bytes, version_label, notes, uploaded_by, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO ai_packages (filename, sha256, size_bytes, version_label, notes, uploaded_by, is_active, archive_format)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'exe')
 		ON CONFLICT (sha256) DO UPDATE SET
 			version_label = EXCLUDED.version_label,
 			notes         = EXCLUDED.notes
 		RETURNING id, filename, sha256, size_bytes, version_label, notes,
-		          external_url, uploaded_by, uploaded_at, is_active, revoked_at
+		          external_url, archive_format, entrypoint,
+		          uploaded_by, uploaded_at, is_active, revoked_at
 	`, filename, digest, written, versionLabel, notes, uploadedBy, setActive).Scan(
 		&pkg.ID, &pkg.Filename, &pkg.SHA256, &pkg.SizeBytes, &pkg.VersionLabel, &pkg.Notes,
-		&pkg.ExternalURL, &pkg.UploadedBy, &pkg.UploadedAt, &pkg.IsActive, &pkg.RevokedAt,
+		&pkg.ExternalURL, &pkg.ArchiveFormat, &pkg.Entrypoint,
+		&pkg.UploadedBy, &pkg.UploadedAt, &pkg.IsActive, &pkg.RevokedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert ai_package: %w", err)
@@ -149,13 +151,17 @@ func (s *AIPackageService) SetActive(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 
-	var sha, filename string
+	var (
+		sha             string
+		filename        string
+		archiveFormat   string
+	)
 	err = tx.QueryRow(ctx, `
 		UPDATE ai_packages
 		SET is_active = TRUE
 		WHERE id = $1 AND revoked_at IS NULL
-		RETURNING sha256, filename
-	`, id).Scan(&sha, &filename)
+		RETURNING sha256, filename, archive_format
+	`, id).Scan(&sha, &filename, &archiveFormat)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrAIPackageNotFound
 	}
@@ -163,9 +169,22 @@ func (s *AIPackageService) SetActive(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 
-	src := filepath.Join(s.storageDir, sha+filepath.Ext(filename))
-	if err := s.publishActiveCopyLocked(src); err != nil {
-		return fmt.Errorf("publish active: %w", err)
+	// Clear ai_launched_at fleet-wide so machines that already ran the
+	// previous active package pick up the new one on their next
+	// heartbeat. Same atomic-fan-out pattern videos use.
+	if _, err := tx.Exec(ctx,
+		`UPDATE machines SET ai_launched_at = NULL WHERE disabled_at IS NULL`,
+	); err != nil {
+		return fmt.Errorf("clear ai_launched_at: %w", err)
+	}
+
+	// Only republish a public file copy for the legacy 'exe' format.
+	// 'zip' archives live on the CDN; nothing to copy server-side.
+	if archiveFormat == "" || archiveFormat == "exe" {
+		src := filepath.Join(s.storageDir, sha+filepath.Ext(filename))
+		if err := s.publishActiveCopyLocked(src); err != nil {
+			return fmt.Errorf("publish active: %w", err)
+		}
 	}
 
 	return tx.Commit(ctx)
@@ -189,7 +208,8 @@ func (s *AIPackageService) Revoke(ctx context.Context, id uuid.UUID) error {
 func (s *AIPackageService) List(ctx context.Context) ([]models.AIPackage, error) {
 	rows, err := s.db.Pool.Query(ctx, `
 		SELECT id, filename, sha256, size_bytes, version_label, notes,
-		       external_url, uploaded_by, uploaded_at, is_active, revoked_at
+		       external_url, archive_format, entrypoint,
+		       uploaded_by, uploaded_at, is_active, revoked_at
 		FROM ai_packages
 		ORDER BY is_active DESC, uploaded_at DESC
 		LIMIT 100
@@ -204,7 +224,8 @@ func (s *AIPackageService) List(ctx context.Context) ([]models.AIPackage, error)
 		var p models.AIPackage
 		if err := rows.Scan(
 			&p.ID, &p.Filename, &p.SHA256, &p.SizeBytes, &p.VersionLabel, &p.Notes,
-			&p.ExternalURL, &p.UploadedBy, &p.UploadedAt, &p.IsActive, &p.RevokedAt,
+			&p.ExternalURL, &p.ArchiveFormat, &p.Entrypoint,
+			&p.UploadedBy, &p.UploadedAt, &p.IsActive, &p.RevokedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -235,27 +256,44 @@ func (s *AIPackageService) RegisterExternal(
 		); err != nil {
 			return nil, fmt.Errorf("deactivate prior: %w", err)
 		}
+		// Clear ai_launched_at fleet-wide so machines that already
+		// ran the previous package pick up the new one. Same atomic
+		// pattern videos use.
+		if _, err := tx.Exec(ctx,
+			`UPDATE machines SET ai_launched_at = NULL WHERE disabled_at IS NULL`,
+		); err != nil {
+			return nil, fmt.Errorf("clear ai_launched_at: %w", err)
+		}
 	}
 
 	sha := strings.ToLower(req.SHA256)
+	archiveFormat := req.ArchiveFormat
+	if archiveFormat == "" {
+		archiveFormat = "exe"
+	}
 
 	var pkg models.AIPackage
 	err = tx.QueryRow(ctx, `
 		INSERT INTO ai_packages (
 			filename, sha256, size_bytes, version_label, notes,
-			external_url, uploaded_by, is_active
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			external_url, archive_format, entrypoint,
+			uploaded_by, is_active
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (sha256) DO UPDATE SET
-			version_label = EXCLUDED.version_label,
-			notes         = EXCLUDED.notes,
-			external_url  = EXCLUDED.external_url
+			version_label  = EXCLUDED.version_label,
+			notes          = EXCLUDED.notes,
+			external_url   = EXCLUDED.external_url,
+			archive_format = EXCLUDED.archive_format,
+			entrypoint     = EXCLUDED.entrypoint
 		RETURNING id, filename, sha256, size_bytes, version_label, notes,
-		          external_url, uploaded_by, uploaded_at, is_active, revoked_at
+		          external_url, archive_format, entrypoint,
+		          uploaded_by, uploaded_at, is_active, revoked_at
 	`, req.Filename, sha, req.SizeBytes, req.VersionLabel, req.Notes,
-		req.URL, uploadedBy, req.SetActive,
+		req.URL, archiveFormat, req.Entrypoint, uploadedBy, req.SetActive,
 	).Scan(
 		&pkg.ID, &pkg.Filename, &pkg.SHA256, &pkg.SizeBytes, &pkg.VersionLabel, &pkg.Notes,
-		&pkg.ExternalURL, &pkg.UploadedBy, &pkg.UploadedAt, &pkg.IsActive, &pkg.RevokedAt,
+		&pkg.ExternalURL, &pkg.ArchiveFormat, &pkg.Entrypoint,
+		&pkg.UploadedBy, &pkg.UploadedAt, &pkg.IsActive, &pkg.RevokedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("insert external ai_package: %w", err)
@@ -273,17 +311,20 @@ func (s *AIPackageService) RegisterExternal(
 // that URL — much faster than the VPS for 35MB+ binaries.
 func (s *AIPackageService) GetActiveForAgent(ctx context.Context) (*models.AgentAIPackageResponse, error) {
 	var (
-		sha          string
-		size         int64
-		versionLabel string
-		externalURL  *string
+		sha           string
+		size          int64
+		versionLabel  string
+		externalURL   *string
+		archiveFormat string
+		entrypoint    *string
 	)
 	err := s.db.Pool.QueryRow(ctx, `
-		SELECT sha256, size_bytes, version_label, external_url
+		SELECT sha256, size_bytes, version_label, external_url,
+		       archive_format, entrypoint
 		FROM ai_packages
 		WHERE is_active = TRUE AND revoked_at IS NULL
 		LIMIT 1
-	`).Scan(&sha, &size, &versionLabel, &externalURL)
+	`).Scan(&sha, &size, &versionLabel, &externalURL, &archiveFormat, &entrypoint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return &models.AgentAIPackageResponse{Available: false}, nil
 	}
@@ -296,13 +337,18 @@ func (s *AIPackageService) GetActiveForAgent(ctx context.Context) (*models.Agent
 		downloadURL = *externalURL
 	}
 
-	return &models.AgentAIPackageResponse{
-		Available:    true,
-		SHA256:       sha,
-		SizeBytes:    size,
-		VersionLabel: versionLabel,
-		DownloadURL:  downloadURL,
-	}, nil
+	resp := &models.AgentAIPackageResponse{
+		Available:     true,
+		SHA256:        sha,
+		SizeBytes:     size,
+		VersionLabel:  versionLabel,
+		DownloadURL:   downloadURL,
+		ArchiveFormat: archiveFormat,
+	}
+	if entrypoint != nil {
+		resp.Entrypoint = *entrypoint
+	}
+	return resp, nil
 }
 
 // publishActiveCopyLocked copies the content-addressed source into the

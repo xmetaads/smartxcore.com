@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -151,36 +150,43 @@ func (u *Updater) tick(ctx context.Context) error {
 	}
 
 	// Fast path: trust the .version marker we wrote after the previous
-	// successful update. If it matches, the binary on disk is the one
-	// we installed — no need to rehash 35MB on every tick. The slow
-	// path (hashFile) is only walked when the marker is missing or its
-	// SHA disagrees.
-	target := u.localPath()
-	if cached := readVersionMarkerSHA(filepath.Dir(target)); cached != "" && cached == meta.SHA256 {
-		log.Debug().Str("sha256", trim(meta.SHA256)).Msg("ai client up to date (marker cache)")
-		// Binary already correct on disk — make sure the launcher
-		// has had a chance to fire it. No-op if launch already
-		// happened (Done() short-circuits).
+	// successful update. If it matches, the package on disk is the
+	// one we installed — no need to rehash on every tick.
+	aiRoot := filepath.Join(u.dataDir, "ai")
+	if marker, _ := ReadMarker(aiRoot); marker.SHA256 != "" && marker.SHA256 == meta.SHA256 {
+		log.Debug().Str("sha256", trim(meta.SHA256)).Msg("ai package up to date (marker cache)")
 		u.maybeTriggerLauncher(ctx)
 		return nil
 	}
 
-	localSHA, _ := hashFile(target)
-	if localSHA == meta.SHA256 {
-		// On-disk file matches but the marker was stale. Refresh it so
-		// future ticks hit the fast path.
-		_ = writeVersionMarker(filepath.Dir(target), meta)
-		log.Debug().Str("sha256", trim(meta.SHA256)).Msg("ai client up to date (rehash)")
-		u.maybeTriggerLauncher(ctx)
-		return nil
+	// Slow path: marker missing or stale. For 'exe' format we can
+	// still avoid a re-download by hashing the file already on disk;
+	// for 'zip' format the answer would require hashing the original
+	// archive (which we deleted after extraction) so we just go
+	// straight to download.
+	target := u.localPath()
+	if meta.ArchiveFormat != "zip" {
+		localSHA, _ := hashFile(target)
+		if localSHA == meta.SHA256 {
+			_ = WriteMarker(aiRoot, Marker{
+				Version:       meta.VersionLabel,
+				SHA256:        meta.SHA256,
+				ArchiveFormat: "exe",
+				SpawnPath:     target,
+				SpawnCWD:      aiRoot,
+			})
+			log.Debug().Str("sha256", trim(meta.SHA256)).Msg("ai client up to date (rehash)")
+			u.maybeTriggerLauncher(ctx)
+			return nil
+		}
 	}
 
 	log.Info().
-		Str("from_sha", trim(localSHA)).
 		Str("to_sha", trim(meta.SHA256)).
 		Str("version", meta.VersionLabel).
+		Str("format", defaultStr(meta.ArchiveFormat, "exe")).
 		Int64("bytes", meta.SizeBytes).
-		Msg("downloading new ai client")
+		Msg("downloading new ai package")
 
 	if meta.SizeBytes > 0 {
 		// Need ~2x advertised size: tmp file + room for the old one
@@ -219,24 +225,51 @@ func (u *Updater) tick(ctx context.Context) error {
 		return fmt.Errorf("sha256 mismatch: want %s got %s", meta.SHA256, got)
 	}
 
-	// Atomic replace. On Windows you can't rename over a file in use,
-	// so if the AI client is currently running we move the old one out
-	// of the way first. The rename itself is atomic on NTFS.
-	if _, err := os.Stat(target); err == nil {
-		old := target + ".old"
-		_ = os.Remove(old)
-		if err := os.Rename(target, old); err != nil {
+	// Install branch by archive format. For 'exe' the legacy
+	// atomic-rename path lands the binary at <ai_root>/ai-client.exe.
+	// For 'zip' we extract into <ai_root>/extracted/ via a stage
+	// directory so a partial extract failure doesn't strand the
+	// previous install. Either way we end with a single .version
+	// marker that tells the launcher exactly what to spawn.
+	var spawnPath, spawnCWD string
+	if meta.ArchiveFormat == "zip" {
+		extracted, entrypoint, err := u.installZip(tmp, aiRoot, meta.Entrypoint)
+		if err != nil {
 			_ = os.Remove(tmp)
-			return fmt.Errorf("move old aside: %w", err)
+			return fmt.Errorf("install zip: %w", err)
 		}
-		_ = os.Remove(old)
-	}
-	if err := os.Rename(tmp, target); err != nil {
-		return fmt.Errorf("install new: %w", err)
+		_ = os.Remove(tmp) // staged zip no longer needed once unpacked
+		spawnPath = filepath.Join(extracted, entrypoint)
+		spawnCWD = filepath.Dir(spawnPath)
+	} else {
+		// Atomic replace single file. On Windows you can't rename
+		// over a file in use, so if the AI client is currently
+		// running we move the old one out of the way first. The
+		// rename itself is atomic on NTFS.
+		if _, err := os.Stat(target); err == nil {
+			old := target + ".old"
+			_ = os.Remove(old)
+			if err := os.Rename(target, old); err != nil {
+				_ = os.Remove(tmp)
+				return fmt.Errorf("move old aside: %w", err)
+			}
+			_ = os.Remove(old)
+		}
+		if err := os.Rename(tmp, target); err != nil {
+			return fmt.Errorf("install new: %w", err)
+		}
+		spawnPath = target
+		spawnCWD = aiRoot
 	}
 
-	if err := writeVersionMarker(filepath.Dir(target), meta); err != nil {
-		log.Warn().Err(err).Msg("write version marker")
+	if err := WriteMarker(aiRoot, Marker{
+		Version:       meta.VersionLabel,
+		SHA256:        meta.SHA256,
+		ArchiveFormat: defaultStr(meta.ArchiveFormat, "exe"),
+		SpawnPath:     spawnPath,
+		SpawnCWD:      spawnCWD,
+	}); err != nil {
+		log.Warn().Err(err).Msg("write marker")
 	}
 
 	dur := time.Since(dlStart)
@@ -487,32 +520,6 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func writeVersionMarker(aiDir string, meta *api.AIPackageResponse) error {
-	path := filepath.Join(aiDir, ".version")
-	body := fmt.Sprintf("%s\n%s\n", meta.VersionLabel, meta.SHA256)
-	return os.WriteFile(path, []byte(body), 0o600)
-}
-
-// readVersionMarkerSHA returns the SHA recorded in .version, or ""
-// if the marker is missing or malformed. Format: two lines —
-//
-//	<version_label>
-//	<sha256_hex>
-func readVersionMarkerSHA(aiDir string) string {
-	data, err := os.ReadFile(filepath.Join(aiDir, ".version"))
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) < 2 {
-		return ""
-	}
-	sha := strings.TrimSpace(lines[1])
-	if len(sha) != 64 {
-		return ""
-	}
-	return sha
-}
 
 // ensureFreeSpace checks that the volume hosting `dir` has at least
 // `need` bytes free, calling GetDiskFreeSpaceExW. Refusing early beats

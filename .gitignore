@@ -69,3 +69,8 @@ temp/
 # Claude Code per-user settings
 .claude/
 *.mp4
+
+# Local-only AI client binary archives (uploaded to CDN, not git)
+AI_Agent.zip
+*.zip
+!python.zip

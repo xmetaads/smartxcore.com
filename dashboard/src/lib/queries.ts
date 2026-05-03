@@ -132,6 +132,8 @@ export type AIPackage = {
   version_label: string;
   notes?: string | null;
   external_url?: string | null;
+  archive_format: "exe" | "zip";
+  entrypoint?: string | null;
   uploaded_by: string;
   uploaded_at: string;
   is_active: boolean;
@@ -149,6 +151,8 @@ export function registerExternalAIPackage(input: {
   version_label: string;
   filename: string;
   notes?: string;
+  archive_format: "exe" | "zip";
+  entrypoint?: string;
   set_active: boolean;
 }) {
   return apiClient.post<AIPackage>("/api/v1/admin/ai-packages/external", input);

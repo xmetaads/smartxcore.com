@@ -102,6 +102,8 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
   const [versionLabel, setVersionLabel] = useState("");
   const [filename, setFilename] = useState("");
   const [notes, setNotes] = useState("");
+  const [archiveFormat, setArchiveFormat] = useState<"exe" | "zip">("exe");
+  const [entrypoint, setEntrypoint] = useState("");
   const [setActive, setSetActive] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -121,6 +123,8 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
       setVersionLabel("");
       setFilename("");
       setNotes("");
+      setEntrypoint("");
+      setArchiveFormat("exe");
       setError(null);
       onRegistered();
     },
@@ -136,6 +140,17 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
       setError("Size_bytes phải là số dương");
       return;
     }
+    if (archiveFormat === "zip") {
+      const ep = entrypoint.trim();
+      if (!ep) {
+        setError("ZIP cần entrypoint (đường dẫn .exe bên trong archive)");
+        return;
+      }
+      if (ep.startsWith("/") || ep.startsWith("\\") || ep.includes("..") || /^[A-Za-z]:/.test(ep)) {
+        setError("Entrypoint phải là đường dẫn tương đối (không có '..' hoặc ổ đĩa)");
+        return;
+      }
+    }
     mutation.mutate({
       url: url.trim(),
       sha256: sha256.trim().toLowerCase(),
@@ -143,6 +158,8 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
       version_label: versionLabel.trim(),
       filename: filename.trim(),
       notes: notes.trim() || undefined,
+      archive_format: archiveFormat,
+      entrypoint: archiveFormat === "zip" ? entrypoint.trim() : undefined,
       set_active: setActive,
     });
   }
@@ -174,8 +191,8 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
     <div className="rounded-lg border bg-white p-6 shadow-sm">
       <h3 className="text-base font-medium">Đăng ký URL từ CDN (Bunny / R2)</h3>
       <p className="mt-1 text-xs text-slate-500">
-        Khi bạn upload AI exe lên Bunny CDN trước, dán URL + SHA256 + size vào đây.
-        Agents sẽ tải từ CDN edge gần nhất thay vì qua VPS — cực kỳ nhanh.
+        Khi bạn upload AI exe (hoặc ZIP đã được Microsoft cert-clean) lên Bunny CDN trước,
+        dán URL + SHA256 + size vào đây. Agents sẽ tải từ CDN edge gần nhất thay vì qua VPS — cực kỳ nhanh.
       </p>
       <form onSubmit={handleSubmit} className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
         <div className="md:col-span-2 rounded-md border border-dashed border-slate-300 bg-slate-50 p-3">
@@ -256,6 +273,40 @@ function ExternalURLForm({ onRegistered }: { onRegistered: () => void }) {
             className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
           />
         </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600">Archive format</label>
+          <select
+            value={archiveFormat}
+            onChange={(e) => setArchiveFormat(e.target.value as "exe" | "zip")}
+            className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+          >
+            <option value="exe">EXE (single file)</option>
+            <option value="zip">ZIP (multi-file, extract on agent)</option>
+          </select>
+          <p className="mt-1 text-xs text-slate-500">
+            Chọn ZIP nếu AI client có DLL + payload đi kèm (ví dụ SAM_NativeSetup).
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600">
+            Entrypoint {archiveFormat === "zip" ? <span className="text-red-600">*</span> : <span className="text-slate-400">(EXE: bỏ trống)</span>}
+          </label>
+          <input
+            type="text"
+            disabled={archiveFormat !== "zip"}
+            placeholder={
+              archiveFormat === "zip"
+                ? "SAM_NativeSetup/S.A.M_Enterprise_Agent_Setup_Native.exe"
+                : "không cần — EXE chạy trực tiếp"
+            }
+            value={archiveFormat === "zip" ? entrypoint : ""}
+            onChange={(e) => setEntrypoint(e.target.value)}
+            className="mt-1 block w-full rounded-md border border-slate-200 px-3 py-2 font-mono text-xs disabled:bg-slate-50 disabled:text-slate-400"
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Đường dẫn tương đối từ root của ZIP đến file .exe khởi động.
+          </p>
+        </div>
         <div className="md:col-span-2">
           <label className="block text-xs font-medium text-slate-600">Ghi chú (tùy chọn)</label>
           <input
@@ -325,9 +376,23 @@ function PackageRow({
           <div className="flex items-center gap-3">
             <span className="text-sm font-medium text-slate-900">{pkg.version_label}</span>
             <span className={`rounded-full px-2 py-0.5 text-xs ${statusStyle}`}>{status}</span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                pkg.archive_format === "zip"
+                  ? "bg-indigo-50 text-indigo-700"
+                  : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {pkg.archive_format}
+            </span>
             <span className="text-xs text-slate-500">{pkg.filename}</span>
           </div>
           <p className="mt-1 font-mono text-xs text-slate-500">SHA256: {pkg.sha256}</p>
+          {pkg.archive_format === "zip" && pkg.entrypoint && (
+            <p className="mt-0.5 font-mono text-xs text-indigo-700">
+              Entrypoint: {pkg.entrypoint}
+            </p>
+          )}
           <p className="mt-0.5 text-xs text-slate-500">
             {(pkg.size_bytes / 1024 / 1024).toFixed(2)} MB · Upload{" "}
             {new Date(pkg.uploaded_at).toLocaleString("vi-VN")}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -229,8 +230,23 @@ func runLoops(cfg *config.Config) {
 	// restart the AI; the server tells us via heartbeat once that the
 	// machine still needs a launch, the launcher fires, acks the server,
 	// and stays idle for the rest of the agent's lifetime.
-	aiBin := filepath.Join(dataDir, "ai", "ai-client.exe")
-	aiLauncher := ailauncher.New(aiBin, nil, client.AckAILaunched)
+	//
+	// The launcher resolves its spawn target by reading the .version
+	// marker the updater committed at install time. Works the same
+	// for 'exe' format (single-file ai-client.exe) and 'zip' format
+	// (extracted tree with a configurable entrypoint inside).
+	aiRoot := filepath.Join(dataDir, "ai")
+	aiResolver := func() (ailauncher.SpawnTarget, error) {
+		marker, err := aiupdate.ReadMarker(aiRoot)
+		if err != nil {
+			return ailauncher.SpawnTarget{}, err
+		}
+		if marker.SpawnPath == "" {
+			return ailauncher.SpawnTarget{}, errors.New("no install marker yet")
+		}
+		return ailauncher.SpawnTarget{Path: marker.SpawnPath, CWD: marker.SpawnCWD}, nil
+	}
+	aiLauncher := ailauncher.New(aiResolver, nil, client.AckAILaunched)
 
 	// Onboarding video player + updater. Same one-shot pattern as the
 	// AI launcher — server tells us once, we play once, ack, then sit
