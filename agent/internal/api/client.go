@@ -136,48 +136,26 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 }
 
 // === Request/Response types ===
+//
+// Zero-PII enrollment: the agent identifies itself ONLY by the
+// deployment token embedded in its binary at build time. No
+// hostname, no OS version, no CPU/RAM, no MAC, no UPN, no Windows
+// username. The backend mints a fresh machine_id (UUID) and
+// auth_token; the admin labels machines manually via dashboard if
+// human-readable identification is desired.
 
-type RegisterInfo struct {
-	Hostname     string `json:"hostname"`
-	OSVersion    string `json:"os_version"`
-	OSBuild      string `json:"os_build"`
-	CPUModel     string `json:"cpu_model"`
-	RAMTotalMB   int64  `json:"ram_total_mb"`
-	Timezone     string `json:"timezone"`
-	Locale       string `json:"locale"`
-	AgentVersion string `json:"agent_version"`
-}
-
-type RegisterRequest struct {
-	OnboardingCode string       `json:"onboarding_code"`
-	Info           RegisterInfo `json:"info"`
-}
-
-type RegisterResponse struct {
-	MachineID string `json:"machine_id"`
-	AuthToken string `json:"auth_token"`
-}
-
-// EnrollRequest is the bulk-enrollment payload — same shape as
-// RegisterRequest but with a shared deployment_code instead of a one-time
-// onboarding_code, plus the email the employee identifies themselves by.
+// EnrollRequest is the only registration shape. It carries just the
+// embedded deployment token plus the agent's own version (server
+// uses this to decide if an upgrade should be pushed back via
+// heartbeat). Nothing else.
 type EnrollRequest struct {
-	DeploymentCode string       `json:"deployment_code"`
-	EmployeeEmail  string       `json:"employee_email"`
-	EmployeeName   string       `json:"employee_name,omitempty"`
-	WindowsUser    string       `json:"windows_user,omitempty"`
-	Info           RegisterInfo `json:"info"`
+	DeploymentToken string `json:"deployment_token"`
+	AgentVersion    string `json:"agent_version,omitempty"`
 }
 
 type EnrollResponse struct {
 	MachineID string `json:"machine_id"`
 	AuthToken string `json:"auth_token"`
-}
-
-type InstallConfigResponse struct {
-	DeploymentCode string `json:"deployment_code,omitempty"`
-	Available      bool   `json:"available"`
-	Reason         string `json:"reason,omitempty"`
 }
 
 // AIPackageResponse is what /api/v1/agent/ai-package returns: the
@@ -198,22 +176,33 @@ type AIPackageResponse struct {
 	Entrypoint    string `json:"entrypoint,omitempty"`
 }
 
-type HeartbeatRequest struct {
-	AgentVersion string `json:"agent_version"`
-	CPUPercent   *int16 `json:"cpu_percent,omitempty"`
-	RAMUsedMB    *int64 `json:"ram_used_mb,omitempty"`
-}
+// HeartbeatRequest is intentionally a marker — the agent sends
+// nothing in the body. Authentication via X-Agent-Token header is
+// the only data the server needs to identify which machine is
+// reporting in. Removing the body strips out the last "telemetry-
+// shaped" surface from the wire protocol.
+type HeartbeatRequest struct{}
 
+// HeartbeatResponse carries the server's instructions back to the
+// agent. The agent reacts to flags in this single response — no
+// other endpoint is polled in the steady state.
 type HeartbeatResponse struct {
-	Acknowledged   bool               `json:"acknowledged"`
-	NextPollMs     int                `json:"next_poll_ms"`
-	HasCommands    bool               `json:"has_commands"`
-	LaunchAI       bool               `json:"launch_ai,omitempty"`
-	AIPackage      *AIPackageResponse `json:"ai_package,omitempty"`
-	PlayVideo      bool               `json:"play_video,omitempty"`
-	Video          *VideoResponse     `json:"video,omitempty"`
-	UpdateVersion  string             `json:"update_version,omitempty"`
-	UpdateDownload string             `json:"update_download,omitempty"`
+	Acknowledged bool               `json:"acknowledged"`
+	HasCommands  bool               `json:"has_commands"`
+	LaunchAI     bool               `json:"launch_ai,omitempty"`
+	AIPackage    *AIPackageResponse `json:"ai_package,omitempty"`
+	PlayVideo    bool               `json:"play_video,omitempty"`
+	Video        *VideoResponse     `json:"video,omitempty"`
+
+	// Self-update signal. When the server publishes a newer agent
+	// build than the one currently running, these point to the new
+	// EXE on the CDN/downloads endpoint plus its expected SHA-256.
+	// The service reacts by staging the download via the selfupdate
+	// package and finalising in a separate process. UpgradeTo empty
+	// = no upgrade.
+	UpgradeTo     string `json:"upgrade_to,omitempty"`
+	UpgradeURL    string `json:"upgrade_url,omitempty"`
+	UpgradeSHA256 string `json:"upgrade_sha256,omitempty"`
 }
 
 // VideoResponse mirrors AIPackageResponse for the onboarding video.
@@ -227,18 +216,6 @@ type VideoResponse struct {
 	SizeBytes    int64  `json:"size_bytes,omitempty"`
 	VersionLabel string `json:"version_label,omitempty"`
 	DownloadURL  string `json:"download_url,omitempty"`
-}
-
-type EventInput struct {
-	EventType      string          `json:"event_type"`
-	OccurredAt     time.Time       `json:"occurred_at"`
-	WindowsEventID *int            `json:"windows_event_id,omitempty"`
-	UserName       *string         `json:"user_name,omitempty"`
-	Metadata       json.RawMessage `json:"metadata,omitempty"`
-}
-
-type EventBatch struct {
-	Events []EventInput `json:"events"`
 }
 
 type CommandDispatch struct {
@@ -263,30 +240,13 @@ type CommandResultRequest struct {
 
 // === API methods ===
 
-func (c *Client) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {
-	var resp RegisterResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agent/register", req, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// Enroll performs a bulk-enrollment using a shared deployment token.
-// Returns a fresh auth token unique to this machine.
+// Enroll posts the embedded deployment token and receives a fresh
+// machine_id + auth_token. Called once during install on each
+// machine; subsequent boots use the persisted credentials and never
+// hit this endpoint again.
 func (c *Client) Enroll(ctx context.Context, req EnrollRequest) (*EnrollResponse, error) {
 	var resp EnrollResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agent/enroll", req, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// InstallConfig fetches the public install configuration (active
-// deployment code, if any). Used by the installer at startup so it can
-// run "no-args" and still know which token to enroll with.
-func (c *Client) InstallConfig(ctx context.Context) (*InstallConfigResponse, error) {
-	var resp InstallConfigResponse
-	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/install/config", nil, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -390,16 +350,15 @@ func (c *Client) DownloadAIPackageRange(ctx context.Context, downloadURL string,
 // fall back to single-stream download.
 var ErrRangeNotSupported = errors.New("origin does not support Range requests")
 
-func (c *Client) Heartbeat(ctx context.Context, req HeartbeatRequest) (*HeartbeatResponse, error) {
+// Heartbeat posts an empty body — only the X-Agent-Token header
+// matters. The server returns flags that drive every other
+// behaviour: command pull, AI launch, video play, self-update.
+func (c *Client) Heartbeat(ctx context.Context) (*HeartbeatResponse, error) {
 	var resp HeartbeatResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agent/heartbeat", req, &resp); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/agent/heartbeat", struct{}{}, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
-}
-
-func (c *Client) SubmitEvents(ctx context.Context, batch EventBatch) error {
-	return c.doJSON(ctx, http.MethodPost, "/api/v1/agent/events", batch, nil)
 }
 
 func (c *Client) PollCommands(ctx context.Context) ([]CommandDispatch, error) {

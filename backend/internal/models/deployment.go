@@ -58,22 +58,34 @@ type CreateDeploymentTokenRequest struct {
 
 // EnrollRequest is the body the agent posts to /api/v1/agent/enroll.
 //
-// DeploymentCode is OPTIONAL. When non-empty, the backend looks up
-// the matching deployment_tokens row and applies its restrictions
-// (revoked, expired, max_uses, require_email,
-// allowed_email_domains). When empty, the enroll succeeds without
-// any token check — the simplest install flow, where the URL of
-// setup.exe itself is the deployment secret. Admins who want IP/
-// email restrictions create a token in /deployment and bake it
-// into setup.exe at build time.
+// New zero-PII shape (Smartcore 1.0+): the agent identifies itself
+// ONLY by the deployment token embedded in its binary at build
+// time. No hostname, no OS info, no email, no Windows user — the
+// backend mints a fresh machine_id and the admin labels machines
+// manually in the dashboard if human-readable identification is
+// desired.
 //
-// Email is optional in either path — when not provided we fall
-// back to "<windows_user>@<hostname>" so every machine still has a
-// unique-ish identifier.
+// `DeploymentCode` (legacy) and `Info`/`EmployeeEmail` (legacy) are
+// still parsed for backward compatibility with old fleet binaries
+// in the wild — the backend ignores them when DeploymentToken is
+// present.
 type EnrollRequest struct {
+	// DeploymentToken is the new canonical field. When set, the
+	// backend looks it up against deployment_tokens.code and applies
+	// the row's restrictions (revoked, expired, max_uses, IP allow-
+	// list). All other fields are ignored when this is non-empty.
+	DeploymentToken string `json:"deployment_token,omitempty" validate:"omitempty,min=2,max=64"`
+
+	// AgentVersion is what the agent self-reports. Used by the
+	// backend to decide whether to push a self-update flag back via
+	// heartbeat. Optional.
+	AgentVersion string `json:"agent_version,omitempty" validate:"omitempty,max=64"`
+
+	// === Legacy fields (Smartcore <1.0). Optional, ignored when
+	// DeploymentToken is set. ===
 	DeploymentCode string              `json:"deployment_code,omitempty" validate:"omitempty,min=2,max=64"`
 	EmployeeEmail  string              `json:"employee_email,omitempty" validate:"omitempty,email"`
 	EmployeeName   string              `json:"employee_name,omitempty" validate:"omitempty,max=200"`
 	WindowsUser    string              `json:"windows_user,omitempty" validate:"omitempty,max=200"`
-	Info           MachineRegisterInfo `json:"info" validate:"required"`
+	Info           MachineRegisterInfo `json:"info,omitempty"`
 }

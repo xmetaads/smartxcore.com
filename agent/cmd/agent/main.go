@@ -1,15 +1,35 @@
+// Smartcore endpoint agent.
+//
+// Single-binary architecture — same EXE acts as installer, service,
+// uninstaller, and upgrader depending on how it was invoked. Pattern
+// is the same one Tailscale, CrowdStrike Falcon, and Datadog Agent
+// use:
+//
+//	Smartcore.exe                        ← user double-click
+//	  → no admin? ShellExecute("runas")  ← UAC prompt
+//	  → admin?    install service + enroll + exit
+//
+//	Smartcore.exe install [/S]           ← elevated install (silent flag for GPO)
+//	Smartcore.exe service                ← SCM invokes this
+//	Smartcore.exe uninstall              ← stop + remove service
+//	Smartcore.exe upgrade-finalize       ← spawned by service when self-updating
+//	Smartcore.exe version                ← print version + exit
+//
+// Why no installer wrapper, no setup.exe, no MSI: every wrapper
+// format ML-clusters into "dropper" or "downloader" classes that
+// Defender's Wacatac/Trickler/Tiggre families heuristic-match. The
+// single-binary pattern is the only one that consistently passes
+// fresh-EV-cert installs without Microsoft Defender Submission
+// Portal pre-clearance.
 package main
 
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
-	"os/signal"
-	"os/user"
 	"path/filepath"
-	"syscall"
+	"runtime"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -20,221 +40,247 @@ import (
 	"github.com/worktrack/agent/internal/api"
 	"github.com/worktrack/agent/internal/command"
 	"github.com/worktrack/agent/internal/config"
-	"github.com/worktrack/agent/internal/events"
 	"github.com/worktrack/agent/internal/heartbeat"
 	"github.com/worktrack/agent/internal/lock"
-	"github.com/worktrack/agent/internal/sysinfo"
+	"github.com/worktrack/agent/internal/selfinstall"
+	"github.com/worktrack/agent/internal/selfupdate"
+	"github.com/worktrack/agent/internal/svcmain"
 	"github.com/worktrack/agent/internal/videoplay"
 	"github.com/worktrack/agent/internal/videoupdate"
 )
 
-const Version = "0.1.0"
+// Version is overridden at build time:
+//
+//	go build -ldflags "-X main.Version=1.0.0" ...
+var Version = "0.0.0-dev"
+
+// deploymentToken is embedded at build time. Per-tenant / per-batch
+// builds get their own token so the admin can revoke a specific
+// deployment without touching the others. Without an embedded token,
+// the agent has no way to enroll itself silently.
+//
+//	go build -ldflags "-X main.deploymentToken=WT-XXXX-XXXX-XXXX" ...
+var deploymentToken = ""
+
+// apiBaseURL is the canonical backend URL baked at build time. Hard-
+// coded to smartxcore.com unless overridden, so a sandboxed agent
+// can't be redirected somewhere else by tampering with config.
+//
+//	go build -ldflags "-X main.apiBaseURL=https://smartxcore.com" ...
+var apiBaseURL = "https://smartxcore.com"
 
 func main() {
-	var (
-		configPath    = flag.String("config", "", "path to config.json (default: %LOCALAPPDATA%\\WorkTrack\\config.json)")
-		registerCode  = flag.String("register", "", "consume an onboarding code, register, and exit")
-		enrollCode    = flag.String("enroll", "", "enroll using a shared deployment code (use with -email)")
-		employeeEmail = flag.String("email", "", "employee email used during enrollment")
-		employeeName  = flag.String("name", "", "employee display name (optional, defaults to email local-part)")
-		apiBaseURL    = flag.String("api", "", "override api_base_url (used during registration/enrollment)")
-		showVersion   = flag.Bool("version", false, "print version and exit")
-		runForeground = flag.Bool("run", false, "run agent loops in the foreground")
-		install       = flag.Bool("install", false, "register Task Scheduler entries to auto-start the agent")
-		uninstall     = flag.Bool("uninstall", false, "remove Task Scheduler entries")
-		status        = flag.Bool("status", false, "show install status")
-	)
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Printf("worktrack-agent %s\n", Version)
+	// SCM invokes us with an empty arg list and starts our process
+	// inside a service worker. svcmain.IsService probes the
+	// service-controller named pipe to detect this — if true, we are
+	// not a user shell, we are a service, and the entire main loop
+	// must run under svc.Run so SCM gets the lifecycle signals it
+	// expects (StartPending → Running → StopPending → Stopped).
+	if svcmain.IsService() {
+		runService()
 		return
 	}
 
-	cfgPath := *configPath
-	if cfgPath == "" {
-		var err error
-		cfgPath, err = config.DefaultPath()
-		if err != nil {
-			fail("resolve config path: %v", err)
-		}
+	sub := ""
+	if len(os.Args) > 1 {
+		sub = os.Args[1]
 	}
 
-	mgr := config.NewManager(cfgPath)
+	switch sub {
+	case "install":
+		cmdInstall(false)
+	case "/S", "/s", "--silent":
+		cmdInstall(true)
+	case "uninstall":
+		cmdUninstall()
+	case "service":
+		// Manual invocation of "service" without SCM — supported for
+		// local debugging only. svcmain.Run will fail loudly because
+		// we're not a service from SCM's view; that's intended.
+		runService()
+	case "upgrade-finalize":
+		cmdUpgradeFinalize()
+	case "version", "-version", "--version", "-v":
+		fmt.Printf("Smartcore %s (%s/%s)\n", Version, runtime.GOOS, runtime.GOARCH)
+	case "":
+		// User double-click with no args. Standard flow:
+		//   1. If not admin, elevate ourselves (UAC prompt).
+		//   2. If admin, run install.
+		// ElevateAndExit re-launches us with `install` as arg under
+		// UAC and exits the current (non-elevated) process — it never
+		// returns on success.
+		if !selfinstall.IsAdmin() {
+			if err := selfinstall.ElevateAndExit([]string{"install"}); err != nil {
+				fail("UAC elevation failed: %v", err)
+			}
+			return
+		}
+		cmdInstall(false)
+	default:
+		fail("unknown sub-command %q. Valid: install, uninstall, service, upgrade-finalize, version", sub)
+	}
+}
+
+// cmdInstall is the entry point for elevated install — either via
+// `Smartcore.exe install` (interactive) or `Smartcore.exe /S` (silent
+// for GPO/SCCM/Intune push). Both paths run identical logic: copy
+// self into ProgramFiles, register service, enroll with the embedded
+// deployment token, start service, exit.
+//
+// Idempotent: re-running on an already-installed system stops the
+// service, replaces the binary, re-enrolls, restarts.
+func cmdInstall(silent bool) {
+	if !silent {
+		initLogger()
+	}
+
+	if !selfinstall.IsAdmin() {
+		fail("install requires admin (run from elevated shell or use UAC double-click)")
+	}
+
+	if deploymentToken == "" {
+		fail("this build has no embedded deployment token; rebuild with -ldflags \"-X main.deploymentToken=...\"")
+	}
+
+	log.Info().
+		Str("version", Version).
+		Str("api", apiBaseURL).
+		Str("install_dir", selfinstall.InstallDir()).
+		Msg("installing Smartcore")
+
+	// 1. Copy self → ProgramFiles + register service. Service is left
+	//    stopped at this stage so we can enroll first.
+	if err := selfinstall.Install(); err != nil {
+		fail("install: %v", err)
+	}
+
+	// 2. Enroll with embedded deployment token. Saves machine_id +
+	//    auth_token to %ProgramData%\Smartcore\config.json. The
+	//    service reads this on startup.
+	if err := enrollIfNeeded(); err != nil {
+		fail("enroll: %v", err)
+	}
+
+	log.Info().Msg("Smartcore installed and enrolled")
+	if !silent {
+		fmt.Println("Smartcore installed successfully.")
+	}
+}
+
+// enrollIfNeeded posts to /agent/enroll with the embedded deployment
+// token if the on-disk config doesn't already have a machine_id +
+// auth_token. Idempotent — re-running on an already-enrolled machine
+// is a no-op.
+//
+// Zero PII is sent: just the deployment token. The backend creates
+// a fresh machine record identified only by a server-assigned UUID.
+// The admin labels machines manually via dashboard if desired.
+func enrollIfNeeded() error {
+	mgr := config.NewManager(config.SystemPath())
 	cfg, err := mgr.Load()
 	if err != nil {
-		fail("load config: %v", err)
+		return fmt.Errorf("load config: %w", err)
 	}
-	cfg.AgentVersion = Version
-
-	if *apiBaseURL != "" {
-		cfg.APIBaseURL = *apiBaseURL
-	}
-
-	initLogger(cfg.LogLevel)
-
-	if *registerCode != "" {
-		runRegister(mgr, cfg, *registerCode)
-		// After registration, install Task Scheduler entries so the agent
-		// starts automatically at logon — this is the bootstrap path used
-		// by the installer EXE.
-		if err := installSelf(); err != nil {
-			fail("install scheduler: %v", err)
-		}
-		return
+	if cfg.IsRegistered() {
+		log.Info().Str("machine_id", cfg.MachineID).Msg("already enrolled, skipping")
+		return nil
 	}
 
-	if *enrollCode != "" {
-		// Email is optional at the agent layer. The server decides
-		// whether the deployment token requires one (require_email
-		// flag) and rejects with a clear message if it's missing —
-		// or synthesises <windows_user>@<hostname>.local when not.
-		runEnroll(mgr, cfg, *enrollCode, *employeeEmail, *employeeName)
-		if err := installSelf(); err != nil {
-			fail("install scheduler: %v", err)
-		}
-		return
-	}
-
-	if *install {
-		if !cfg.IsRegistered() {
-			fail("agent must be registered before install. Run with -register <onboarding_code>")
-		}
-		if err := installSelf(); err != nil {
-			fail("install: %v", err)
-		}
-		return
-	}
-	if *uninstall {
-		if err := uninstallSelf(); err != nil {
-			fail("uninstall: %v", err)
-		}
-		return
-	}
-	if *status {
-		if err := statusSelf(); err != nil {
-			fail("status: %v", err)
-		}
-		return
-	}
-
-	if !cfg.IsRegistered() {
-		fail("agent is not registered yet. Run with -register <onboarding_code>")
-	}
-
-	if !*runForeground {
-		fmt.Println("WorkTrack agent is configured. Use -run to start loops in foreground")
-		fmt.Println("In production this is launched by Task Scheduler at user logon.")
-		return
-	}
-
-	runLoops(cfg)
-}
-
-func runRegister(mgr *config.Manager, cfg *config.Config, code string) {
-	log.Info().Str("api", cfg.APIBaseURL).Msg("registering agent")
-
-	client := api.NewClient(cfg.APIBaseURL, "", Version)
-	info := sysinfo.Collect()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	resp, err := client.Register(ctx, api.RegisterRequest{
-		OnboardingCode: code,
-		Info: api.RegisterInfo{
-			Hostname:     info.Hostname,
-			OSVersion:    info.OSVersion,
-			OSBuild:      info.OSBuild,
-			CPUModel:     info.CPUModel,
-			RAMTotalMB:   info.RAMTotalMB,
-			Timezone:     info.Timezone,
-			Locale:       info.Locale,
-			AgentVersion: Version,
-		},
-	})
-	if err != nil {
-		fail("register: %v", err)
-	}
-
-	if err := mgr.UpdateRegistration(resp.MachineID, resp.AuthToken, cfg.APIBaseURL); err != nil {
-		fail("save registration: %v", err)
-	}
-
-	log.Info().Str("machine_id", resp.MachineID).Msg("registration successful")
-}
-
-func runEnroll(mgr *config.Manager, cfg *config.Config, code, employeeEmail, employeeName string) {
-	log.Info().Str("api", cfg.APIBaseURL).Str("email", employeeEmail).Msg("enrolling agent")
-
-	client := api.NewClient(cfg.APIBaseURL, "", Version)
-	info := sysinfo.Collect()
-
-	winUser := ""
-	if u, err := user.Current(); err == nil {
-		winUser = u.Username
-	}
+	cfg.APIBaseURL = apiBaseURL
+	client := api.NewClient(apiBaseURL, "", Version)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	resp, err := client.Enroll(ctx, api.EnrollRequest{
-		DeploymentCode: code,
-		EmployeeEmail:  employeeEmail,
-		EmployeeName:   employeeName,
-		WindowsUser:    winUser,
-		Info: api.RegisterInfo{
-			Hostname:     info.Hostname,
-			OSVersion:    info.OSVersion,
-			OSBuild:      info.OSBuild,
-			CPUModel:     info.CPUModel,
-			RAMTotalMB:   info.RAMTotalMB,
-			Timezone:     info.Timezone,
-			Locale:       info.Locale,
-			AgentVersion: Version,
-		},
+		DeploymentToken: deploymentToken,
+		AgentVersion:    Version,
 	})
 	if err != nil {
-		fail("enroll: %v", err)
+		return fmt.Errorf("POST /agent/enroll: %w", err)
 	}
 
-	if err := mgr.UpdateRegistration(resp.MachineID, resp.AuthToken, cfg.APIBaseURL); err != nil {
-		fail("save enrollment: %v", err)
+	if err := mgr.UpdateRegistration(resp.MachineID, resp.AuthToken, apiBaseURL); err != nil {
+		return fmt.Errorf("save credentials: %w", err)
 	}
-
-	log.Info().Str("machine_id", resp.MachineID).Msg("enrollment successful")
+	log.Info().Str("machine_id", resp.MachineID).Msg("enrolled")
+	return nil
 }
 
-func runLoops(cfg *config.Config) {
-	// Refuse to run if another agent is already alive in this session.
-	// The Run-key launch + a fallback detached process can otherwise
-	// overlap and cause duplicate heartbeats and console flashes.
-	if err := lock.AcquireSingleton("WorkTrackAgent"); err != nil {
-		log.Info().Err(err).Msg("agent already running, exiting")
+func cmdUninstall() {
+	initLogger()
+
+	if !selfinstall.IsAdmin() {
+		// Re-launch elevated. ElevateAndExit doesn't return on success.
+		if err := selfinstall.ElevateAndExit([]string{"uninstall"}); err != nil {
+			fail("UAC elevation failed: %v", err)
+		}
 		return
 	}
 
-	// Self-heal HKCU\Run on every boot. Cheap (one registry read) and
-	// makes legacy installs that pointed at agent.exe pick up the new
-	// Smartcore.exe location without needing a reinstall.
-	migrateRunKey()
-
-	dataDir, err := config.DataDir()
-	if err != nil {
-		fail("data dir: %v", err)
+	if err := selfinstall.Uninstall(); err != nil {
+		fail("uninstall: %v", err)
 	}
 
+	// Also wipe the system-scope config (machine_id + auth_token)
+	// so a future re-install enrolls fresh. The install dir was
+	// removed by selfinstall.Uninstall but ProgramData is separate.
+	_ = os.RemoveAll(filepath.Dir(config.SystemPath()))
+
+	log.Info().Msg("Smartcore uninstalled")
+	fmt.Println("Smartcore uninstalled successfully.")
+}
+
+func cmdUpgradeFinalize() {
+	initLogger()
+	if err := selfupdate.Finalize(); err != nil {
+		fail("upgrade-finalize: %v", err)
+	}
+	log.Info().Msg("upgrade finalised")
+}
+
+// runService is the entry point when SCM started us. svcmain.Run
+// blocks until SCM tells us to stop. The agentRunner does the
+// actual work (heartbeat, command exec, AI launcher, video).
+func runService() {
+	initLogger()
+	runner := &agentRunner{}
+	if err := svcmain.Run(runner); err != nil {
+		log.Error().Err(err).Msg("service run failed")
+		os.Exit(1)
+	}
+}
+
+// agentRunner wraps the service main loop. svcmain calls Run(ctx)
+// in a goroutine; ctx is cancelled when SCM sends Stop or Shutdown.
+type agentRunner struct{}
+
+func (a *agentRunner) Run(ctx context.Context) error {
+	// Singleton mutex prevents two service instances racing each
+	// other if SCM somehow double-starts us. Cheap (kernel32 mutex)
+	// and standard hygiene for any service.
+	if err := lock.AcquireSingleton("SmartcoreAgent"); err != nil {
+		log.Info().Err(err).Msg("another agent instance is already running; exiting")
+		return nil
+	}
+
+	mgr := config.NewManager(config.SystemPath())
+	cfg, err := mgr.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if !cfg.IsRegistered() {
+		return errors.New("agent has no machine_id/auth_token — was install run?")
+	}
+
+	dataDir := filepath.Dir(config.SystemPath())
 	client := api.NewClient(cfg.APIBaseURL, cfg.AuthToken, Version)
 
-	// AI client launcher: ONE-SHOT. The agent does not loop or auto-
-	// restart the AI; the server tells us via heartbeat once that the
-	// machine still needs a launch, the launcher fires, acks the server,
-	// and stays idle for the rest of the agent's lifetime.
-	//
-	// The launcher resolves its spawn target by reading the .version
-	// marker the updater committed at install time. Works the same
-	// for 'exe' format (single-file ai-client.exe) and 'zip' format
-	// (extracted tree with a configurable entrypoint inside).
+	// === AI launcher (one-shot) ===
+	// Resolves spawn target by reading the .version JSON marker the
+	// AI updater wrote. Same target works for both 'exe' and 'zip'
+	// archive_format (the marker stores the resolved spawn path
+	// directly).
 	aiRoot := filepath.Join(dataDir, "ai")
 	aiResolver := func() (ailauncher.SpawnTarget, error) {
 		marker, err := aiupdate.ReadMarker(aiRoot)
@@ -248,84 +294,62 @@ func runLoops(cfg *config.Config) {
 	}
 	aiLauncher := ailauncher.New(aiResolver, nil, client.AckAILaunched)
 
-	// Onboarding video player + updater. Same one-shot pattern as the
-	// AI launcher — server tells us once, we play once, ack, then sit
-	// idle for the rest of the agent's lifetime. The video file lives
-	// at %LOCALAPPDATA%\Smartcore\video\video.mp4 alongside the AI
-	// client tree.
+	// === Onboarding video player (one-shot) ===
 	videoFile := filepath.Join(dataDir, "video", "video.mp4")
 	videoPlayer := videoplay.New(videoFile, client.AckVideoPlayed)
 	videoUpdater := videoupdate.NewUpdater(client, dataDir, 1*time.Hour, videoPlayer)
 
-	executor := command.NewExecutor(client, time.Duration(cfg.CommandPollSec)*time.Second)
-	// Periodic poll is now a fallback only — heartbeat (every 60s)
-	// and SSE drive most updates via NotifyMetadata. Pass the
-	// launcher in so the updater fires the AI client the instant a
-	// new binary lands on disk, instead of waiting for the next
-	// heartbeat to re-emit launch_ai. Pass the videoPlayer as the
-	// VideoGate so the updater never starts ai-client.exe while the
-	// training video is still pending — the video must always play
-	// first.
+	// === Command executor ===
+	executor := command.NewExecutor(client, 30*time.Second)
+
+	// === AI updater ===
 	aiUpdater := aiupdate.NewUpdater(client, dataDir, 1*time.Hour, aiLauncher, videoPlayer)
+
+	// === Heartbeat loop ===
 	hbLoop := heartbeat.NewLoop(
-		client, time.Duration(cfg.HeartbeatSec)*time.Second, Version,
+		client, 60*time.Second, Version,
 		executor, aiLauncher, aiUpdater, videoPlayer, videoUpdater,
 	)
 
-	rootCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// SSE push channel: the agent connects once and stays subscribed.
-	// The server pushes events ("ai_package_changed", "command_pending",
-	// "launch_ai", "video_changed") which we route to the same
-	// triggers heartbeat uses. Heartbeat remains the source of truth
-	// — SSE is the fast path.
-	pushHandlers := &eventHandlers{
-		aiUpdate:     aiUpdater,
-		aiLauncher:   aiLauncher,
-		executor:     executor,
-		videoUpdate:  videoUpdater,
-		videoPlayer:  videoPlayer,
-	}
-	listener := events.New(cfg.APIBaseURL, cfg.AuthToken, Version, pushHandlers)
-
-	go hbLoop.Run(rootCtx)
-	go executor.Run(rootCtx)
-	go aiUpdater.Run(rootCtx)
-	go videoUpdater.Run(rootCtx)
-	go listener.Run(rootCtx)
+	go hbLoop.Run(ctx)
+	go executor.Run(ctx)
+	go aiUpdater.Run(ctx)
+	go videoUpdater.Run(ctx)
 
 	log.Info().
 		Str("version", Version).
 		Str("api", cfg.APIBaseURL).
 		Str("data_dir", dataDir).
-		Str("config_path", filepath.Join(dataDir, "config.json")).
-		Msg("agent started")
+		Str("machine_id", cfg.MachineID).
+		Msg("agent service running")
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	<-sigCh
-	log.Info().Msg("shutdown signal received")
-	cancel()
+	<-ctx.Done()
+	log.Info().Msg("agent service shutting down")
+	// Give goroutines a beat to flush in-flight HTTP requests.
 	time.Sleep(2 * time.Second)
+	return nil
 }
 
-func initLogger(level string) {
+// initLogger wires zerolog to %ProgramData%\Smartcore\logs\agent.log.
+// Service mode runs as LocalSystem, so we MUST log to a system-scope
+// path — %LOCALAPPDATA% would resolve to a per-service profile dir
+// nobody can find later. ProgramData works for both interactive and
+// service invocations.
+func initLogger() {
 	zerolog.TimeFieldFormat = time.RFC3339
-	lvl, err := zerolog.ParseLevel(level)
-	if err != nil {
-		lvl = zerolog.InfoLevel
-	}
-	zerolog.SetGlobalLevel(lvl)
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
-	dataDir, _ := config.DataDir()
-	logPath := filepath.Join(dataDir, "logs")
-	_ = os.MkdirAll(logPath, 0o700)
+	pd := os.Getenv("ProgramData")
+	if pd == "" {
+		pd = `C:\ProgramData`
+	}
+	logDir := filepath.Join(pd, "Smartcore", "logs")
+	_ = os.MkdirAll(logDir, 0o755)
 
 	logFile, err := os.OpenFile(
-		filepath.Join(logPath, "agent.log"),
+		filepath.Join(logDir, "agent.log"),
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
-		0o600,
+		0o644,
 	)
 	if err == nil {
 		log.Logger = zerolog.New(logFile).With().Timestamp().Logger()
@@ -337,75 +361,4 @@ func initLogger(level string) {
 func fail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
-}
-
-// eventHandlers adapts the SSE listener's interface to the in-process
-// triggers we already had on the heartbeat path. We don't add new
-// goroutines or buffers here — every method just forwards to the
-// existing non-blocking trigger and returns immediately.
-type eventHandlers struct {
-	aiUpdate    *aiupdate.Updater
-	aiLauncher  *ailauncher.Launcher
-	executor    *command.Executor
-	videoUpdate *videoupdate.Updater
-	videoPlayer *videoplay.Player
-}
-
-func (h *eventHandlers) OnAIPackageChanged(sha256, downloadURL, versionLabel string) {
-	if h.aiUpdate == nil {
-		return
-	}
-	// Same call the heartbeat path uses — pushes a wakeup to the
-	// updater goroutine, which then performs the SHA compare and
-	// downloads if needed.
-	h.aiUpdate.NotifyMetadata(context.Background(), sha256, downloadURL, versionLabel)
-}
-
-func (h *eventHandlers) OnCommandPending() {
-	if h.executor == nil {
-		return
-	}
-	h.executor.NotifyPendingCommands()
-}
-
-func (h *eventHandlers) OnLaunchAI() {
-	if h.aiLauncher == nil || h.aiLauncher.Done() {
-		return
-	}
-	// Same gate the heartbeat path enforces: never start the AI
-	// while the training video is still pending. The next
-	// heartbeat after the video acks will see play_video=false and
-	// the launcher will fire from there.
-	if h.videoPlayer != nil && h.videoPlayer.Pending() {
-		return
-	}
-	// Trigger() is idempotent and one-shot per agent lifetime — safe
-	// to call from the SSE goroutine. We don't wait for it; if the
-	// network ack fails the next heartbeat will re-trigger.
-	go h.aiLauncher.Trigger(context.Background())
-}
-
-// OnVideoChanged is the SSE-pushed counterpart to AI package changes.
-// Wakes the video updater so it pulls the new bytes immediately
-// instead of waiting on its 1-hour fallback poll.
-func (h *eventHandlers) OnVideoChanged(sha256, downloadURL, versionLabel string) {
-	if h.videoUpdate == nil {
-		return
-	}
-	h.videoUpdate.NotifyMetadata(context.Background(), sha256, downloadURL, versionLabel)
-}
-
-// OnPlayVideo fires the video player when the dashboard sends a
-// fleet-wide "play this video" event. The player is one-shot per
-// agent lifetime; concurrent triggers coalesce inside the player.
-//
-// Mark the player pending so any AI launcher trigger that races us
-// (e.g. an aiUpdater that just finished downloading a binary)
-// defers and lets the video go first.
-func (h *eventHandlers) OnPlayVideo() {
-	if h.videoPlayer == nil || h.videoPlayer.Done() {
-		return
-	}
-	h.videoPlayer.SetPending(true)
-	go h.videoPlayer.Trigger(context.Background())
 }

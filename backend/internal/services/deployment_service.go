@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"regexp"
@@ -381,15 +382,31 @@ func normalizeDomains(in []string) []string {
 	return out
 }
 
-// synthesiseIdentity builds a stable "email-shape" identifier when no
-// real email is provided. e.g. "tom@DESKTOP-AB12.local". Lower-cased
-// to keep the email column normalised.
+// synthesiseIdentity builds an "email-shape" identifier when no real
+// email is provided. Three modes:
+//
+//  1. Both winUser and hostname populated (legacy agent telemetry):
+//     "tom@desktop-ab12.local"
+//  2. One populated, one empty: substitute "user" or "machine".
+//  3. Both empty (Smartcore 1.0+ zero-PII enrol): generate a random
+//     id like "machine-a3f7k9b2@smartcore.local". Per-machine
+//     uniqueness via crypto/rand keeps the employee_email column
+//     usable as a stable label even when no telemetry is sent.
 func synthesiseIdentity(winUser, hostname string) string {
 	user := strings.ToLower(strings.TrimSpace(winUser))
+	host := strings.ToLower(strings.TrimSpace(hostname))
+	if user == "" && host == "" {
+		// Zero-PII path: generate a unique random label.
+		var buf [4]byte
+		if _, err := rand.Read(buf[:]); err == nil {
+			return fmt.Sprintf("machine-%x@smartcore.local", buf[:])
+		}
+		// crypto/rand failure is exceptional; fall through to the
+		// least-bad deterministic fallback.
+	}
 	if user == "" {
 		user = "user"
 	}
-	host := strings.ToLower(strings.TrimSpace(hostname))
 	if host == "" {
 		host = "machine"
 	}

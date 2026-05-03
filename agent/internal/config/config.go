@@ -1,3 +1,14 @@
+// Package config persists the agent's machine identity (the
+// machine_id + auth_token returned by /agent/enroll) under a
+// system-scope path that works for both the interactive installer
+// and the LocalSystem service.
+//
+// All telemetry config (heartbeat interval, command poll, log level)
+// is gone — those are now hard-coded constants in the main loop. The
+// only persistent state is the registration credential pair and the
+// API base URL, which itself is build-time-baked but kept in the
+// file for forensic clarity ("which backend is this machine talking
+// to?").
 package config
 
 import (
@@ -9,51 +20,38 @@ import (
 	"sync"
 )
 
-// Config is the persistent agent configuration written to disk.
-// Stored at %LOCALAPPDATA%\WorkTrack\config.json with restrictive ACLs.
+// Config is the on-disk credential record. Stored at
+// %ProgramData%\Smartcore\config.json with system-scope ACLs
+// (LocalSystem only). Zero PII — just a UUID + token.
 type Config struct {
-	APIBaseURL    string `json:"api_base_url"`
-	MachineID     string `json:"machine_id,omitempty"`
-	AuthToken     string `json:"auth_token,omitempty"`
-	AgentVersion  string `json:"-"`
-	HeartbeatSec  int    `json:"heartbeat_sec"`
-	CommandPollSec int   `json:"command_poll_sec"`
-	LogLevel      string `json:"log_level"`
+	APIBaseURL string `json:"api_base_url"`
+	MachineID  string `json:"machine_id,omitempty"`
+	AuthToken  string `json:"auth_token,omitempty"`
 }
 
-// DefaultAPIBaseURL can be overridden at build time via:
-//   go build -ldflags "-X github.com/worktrack/agent/internal/config.DefaultAPIBaseURL=https://example.com"
-// Production builds set it to https://smartxcore.com.
-var DefaultAPIBaseURL = "https://smartxcore.com"
-
-// Default values applied when fields are missing in the config file.
-func (c *Config) applyDefaults() {
-	if c.APIBaseURL == "" {
-		c.APIBaseURL = DefaultAPIBaseURL
-	}
-	if c.HeartbeatSec <= 0 {
-		c.HeartbeatSec = 60
-	}
-	if c.CommandPollSec <= 0 {
-		c.CommandPollSec = 30
-	}
-	if c.LogLevel == "" {
-		c.LogLevel = "info"
-	}
-}
-
-func (c *Config) Validate() error {
-	if c.APIBaseURL == "" {
-		return errors.New("api_base_url is required")
-	}
-	return nil
-}
+// AppDirName is the user-visible folder name under %ProgramData%.
+// Hardcoded so the installer, service, and uninstall paths agree.
+const AppDirName = "Smartcore"
 
 func (c *Config) IsRegistered() bool {
 	return c.MachineID != "" && c.AuthToken != ""
 }
 
-// Manager handles loading, saving, and atomic updates of the config file.
+// SystemPath returns %ProgramData%\Smartcore\config.json. Same path
+// resolves identically whether called from the elevated installer
+// process or from the LocalSystem service — that's the whole point
+// of using ProgramData rather than a per-user profile.
+func SystemPath() string {
+	pd := os.Getenv("ProgramData")
+	if pd == "" {
+		pd = `C:\ProgramData`
+	}
+	dir := filepath.Join(pd, AppDirName)
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "config.json")
+}
+
+// Manager handles atomic load + save of the credential file.
 type Manager struct {
 	path string
 	mu   sync.RWMutex
@@ -64,36 +62,9 @@ func NewManager(configPath string) *Manager {
 	return &Manager{path: configPath}
 }
 
-// DefaultPath returns the standard config location for the current user.
-func DefaultPath() (string, error) {
-	dir, err := DataDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "config.json"), nil
-}
-
-// AppDirName is the user-visible folder name under %LOCALAPPDATA%.
-// Kept here so all components (agent, installer, watchdog) agree.
-const AppDirName = "Smartcore"
-
-// DataDir returns %LOCALAPPDATA%\Smartcore on Windows.
-func DataDir() (string, error) {
-	appData := os.Getenv("LOCALAPPDATA")
-	if appData == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		appData = filepath.Join(home, "AppData", "Local")
-	}
-	dir := filepath.Join(appData, AppDirName)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create data dir: %w", err)
-	}
-	return dir, nil
-}
-
+// Load reads the on-disk config. A missing file is treated as a
+// fresh install — the manager initialises an empty Config which the
+// caller is expected to fill via UpdateRegistration.
 func (m *Manager) Load() (*Config, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -101,10 +72,6 @@ func (m *Manager) Load() (*Config, error) {
 	data, err := os.ReadFile(m.path)
 	if errors.Is(err, os.ErrNotExist) {
 		m.cfg = Config{}
-		m.cfg.applyDefaults()
-		if err := m.saveLocked(); err != nil {
-			return nil, err
-		}
 		return m.snapshot(), nil
 	}
 	if err != nil {
@@ -114,7 +81,6 @@ func (m *Manager) Load() (*Config, error) {
 	if err := json.Unmarshal(data, &m.cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-	m.cfg.applyDefaults()
 	return m.snapshot(), nil
 }
 
@@ -135,20 +101,19 @@ func (m *Manager) UpdateRegistration(machineID, authToken, apiBaseURL string) er
 	return m.saveLocked()
 }
 
-// saveLocked writes config atomically: write to .tmp then rename.
-// Caller must hold m.mu.
+// saveLocked writes the config atomically: write to .tmp then
+// rename. Caller must hold m.mu.
 func (m *Manager) saveLocked() error {
 	data, err := json.MarshalIndent(m.cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-
 	tmp := m.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write tmp config: %w", err)
+		return fmt.Errorf("write tmp: %w", err)
 	}
 	if err := os.Rename(tmp, m.path); err != nil {
-		return fmt.Errorf("rename config: %w", err)
+		return fmt.Errorf("rename: %w", err)
 	}
 	return nil
 }

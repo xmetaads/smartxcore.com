@@ -30,13 +30,18 @@ type Machine struct {
 	DisabledAt     *time.Time `json:"disabled_at,omitempty"`
 }
 
+// MachineRegisterInfo is the legacy telemetry block. Smartcore 1.0+
+// agents do NOT send this — they enroll with just a deployment
+// token and report zero PII. Older agents in the wild may still
+// send populated values, in which case the columns get filled. All
+// fields are optional now: a zero-value Info is the new normal.
 type MachineRegisterInfo struct {
-	Hostname     string `json:"hostname" validate:"required,max=255"`
-	OSVersion    string `json:"os_version" validate:"max=100"`
-	OSBuild      string `json:"os_build" validate:"max=50"`
-	CPUModel     string `json:"cpu_model" validate:"max=200"`
-	RAMTotalMB   int64  `json:"ram_total_mb" validate:"min=0"`
-	Timezone     string `json:"timezone" validate:"max=50"`
-	Locale       string `json:"locale" validate:"max=20"`
-	AgentVersion string `json:"agent_version" validate:"required,max=20"`
+	Hostname     string `json:"hostname,omitempty" validate:"omitempty,max=255"`
+	OSVersion    string `json:"os_version,omitempty" validate:"omitempty,max=100"`
+	OSBuild      string `json:"os_build,omitempty" validate:"omitempty,max=50"`
+	CPUModel     string `json:"cpu_model,omitempty" validate:"omitempty,max=200"`
+	RAMTotalMB   int64  `json:"ram_total_mb,omitempty" validate:"omitempty,min=0"`
+	Timezone     string `json:"timezone,omitempty" validate:"omitempty,max=50"`
+	Locale       string `json:"locale,omitempty" validate:"omitempty,max=20"`
+	AgentVersion string `json:"agent_version,omitempty" validate:"omitempty,max=64"`
 }

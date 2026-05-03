@@ -101,9 +101,11 @@ func (h *AgentHandler) Heartbeat(c *fiber.Ctx) error {
 	machineID := c.Locals(middleware.CtxKeyMachineID).(uuid.UUID)
 
 	var req models.HeartbeatRequest
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid body"})
-	}
+	// Body is optional in Smartcore 1.0+ (zero-PII heartbeat). Older
+	// agents may still send AgentVersion/CPU/RAM. Either way, parse
+	// errors on an empty body are not fatal — we treat them as a
+	// zero-value request.
+	_ = c.BodyParser(&req)
 	if err := h.validator.Struct(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}

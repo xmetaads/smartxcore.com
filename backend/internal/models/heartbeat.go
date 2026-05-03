@@ -16,8 +16,15 @@ type Heartbeat struct {
 	RAMUsedMB    *int64    `json:"ram_used_mb,omitempty"`
 }
 
+// HeartbeatRequest is the body the agent posts to /agent/heartbeat.
+//
+// Smartcore 1.0+ sends an empty {} — auth is via X-Agent-Token
+// header alone, and the agent reports zero telemetry. Older fleet
+// agents may still send AgentVersion/CPU/RAM, all of which are
+// accepted but optional. Validation is intentionally lax here: a
+// zero-value request is the new normal.
 type HeartbeatRequest struct {
-	AgentVersion string `json:"agent_version" validate:"required,max=20"`
+	AgentVersion string `json:"agent_version,omitempty" validate:"omitempty,max=64"`
 	CPUPercent   *int16 `json:"cpu_percent,omitempty" validate:"omitempty,min=0,max=100"`
 	RAMUsedMB    *int64 `json:"ram_used_mb,omitempty" validate:"omitempty,min=0"`
 }

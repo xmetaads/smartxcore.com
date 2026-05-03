@@ -131,9 +131,7 @@ func (l *Loop) sendOne(ctx context.Context) error {
 	reqCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	resp, err := l.client.Heartbeat(reqCtx, api.HeartbeatRequest{
-		AgentVersion: l.version,
-	})
+	resp, err := l.client.Heartbeat(reqCtx)
 	if err != nil {
 		return err
 	}

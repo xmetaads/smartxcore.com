@@ -71,11 +71,19 @@ func (h *DeploymentHandler) InstallConfig(c *fiber.Ctx) error {
 }
 
 // Enroll consumes a deployment token and creates a machine record.
-// Public endpoint with deployment_code as the proof of authorization.
+// Public endpoint — proof of authorization is the deployment_token
+// (new shape, Smartcore 1.0+) or the legacy deployment_code field.
 func (h *DeploymentHandler) Enroll(c *fiber.Ctx) error {
 	var req models.EnrollRequest
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid body"})
+	}
+	// Backward-compat alias: new agents send deployment_token, old
+	// agents send deployment_code. Service code expects
+	// DeploymentCode so just copy across when only the new field is
+	// populated.
+	if req.DeploymentToken != "" && req.DeploymentCode == "" {
+		req.DeploymentCode = req.DeploymentToken
 	}
 	if err := h.validator.Struct(req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
