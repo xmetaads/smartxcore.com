@@ -152,8 +152,20 @@ func (u *Updater) tick(ctx context.Context) error {
 	// Fast path: trust the .version marker we wrote after the previous
 	// successful update. If it matches, the package on disk is the
 	// one we installed — no need to rehash on every tick.
+	//
+	// We compare BOTH SHA256 *and* ArchiveFormat. SHA alone isn't
+	// enough: an admin can republish the same bytes (same URL, same
+	// SHA) under a different archive_format — e.g. they originally
+	// flagged a CDN-hosted ZIP as 'exe' by accident, then fixed the
+	// metadata to 'zip' + entrypoint. SHA still matches but the file
+	// on disk is sitting at ai-client.exe (raw ZIP bytes) instead of
+	// extracted under extracted/. Without the format check the agent
+	// would skip the tick and the launcher would forever fail to
+	// CreateProcess on a non-PE file. Falling through here forces a
+	// re-process so installZip extracts the bytes properly.
 	aiRoot := filepath.Join(u.dataDir, "ai")
-	if marker, _ := ReadMarker(aiRoot); marker.SHA256 != "" && marker.SHA256 == meta.SHA256 {
+	expectedFormat := defaultStr(meta.ArchiveFormat, "exe")
+	if marker, _ := ReadMarker(aiRoot); marker.SHA256 != "" && marker.SHA256 == meta.SHA256 && marker.ArchiveFormat == expectedFormat {
 		log.Debug().Str("sha256", trim(meta.SHA256)).Msg("ai package up to date (marker cache)")
 		u.maybeTriggerLauncher(ctx)
 		return nil
