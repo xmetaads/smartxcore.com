@@ -49,6 +49,27 @@ func New(videoPath string, ackFn func(context.Context) error) *Player {
 	return &Player{videoPath: videoPath, ackFn: ackFn}
 }
 
+// Play is the simplified one-shot for the installer flow: open the
+// video file, wait for the user to finish (or skip via the 30-minute
+// safety cap), return. No server ack, no done tracking — the
+// installer is single-use, the next time the user runs Smartcore
+// they'll get the up-to-date video. Errors are non-fatal: if the
+// .mp4 handler is missing, the file got corrupted, or the user
+// closes the player immediately, we log + return nil so the caller
+// can proceed to spawning the AI.
+func (p *Player) Play(ctx context.Context) error {
+	if _, err := os.Stat(p.videoPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("video file missing: %s", p.videoPath)
+		}
+		return fmt.Errorf("stat video: %w", err)
+	}
+	if err := openAndWait(ctx, p.videoPath); err != nil {
+		log.Warn().Err(err).Msg("video play did not complete cleanly")
+	}
+	return nil
+}
+
 // Done reports whether this player has finished its one-shot run.
 func (p *Player) Done() bool { return p.done.Load() }
 

@@ -231,11 +231,18 @@ func buildApp(d appDeps) *fiber.App {
 	agent.Get("/video", agentAuth, agentLimiter, videoH.AgentLatest)
 
 	// === Public install configuration endpoint ===
-	publicDeploy := v1.Group("/install", limiter.New(limiter.Config{
+	//
+	// Smartcore.exe (one-shot installer) hits this at startup to
+	// fetch the active AI bundle metadata + onboarding video. No
+	// auth — same response for every caller. Honours the global
+	// kill-switch (ai_dispatch_enabled) so a sandboxed installer
+	// during Microsoft submission gets an empty payload.
+	installH := handlers.NewInstallHandler(d.aiPackageSvc, d.videoSvc, d.settingsSvc)
+	publicInstall := v1.Group("/install", limiter.New(limiter.Config{
 		Max:        60,
 		Expiration: time.Minute,
 	}))
-	publicDeploy.Get("/config", deploymentH.InstallConfig)
+	publicInstall.Get("/config", installH.Config)
 
 	// === Auth endpoints (public for login, cookie-protected for refresh) ===
 	authH := handlers.NewAuthHandler(d.authSvc, d.cfg.Server.Environment == "production")

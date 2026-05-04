@@ -1,110 +1,60 @@
 //go:build windows
 
+// Package ailauncher spawns the AI agent's entrypoint as a DETACHED
+// child process running with the current user's privileges.
+//
+// Smartcore is a one-shot installer: it fetches the install config,
+// extracts the AI bundle, and invokes SpawnDetached once. There is
+// no service, no LocalSystem token, and no parent-child supervision.
+// The AI agent runs as the user who ran Smartcore.exe — that is the
+// whole point of this redesign. Earlier revisions invoked the AI
+// from a Windows service, which gave it a SYSTEM token and broke
+// every AI feature that needed access to the user's desktop, browser,
+// files, etc. Spawning from this user-mode process lets the AI
+// behave like every other user app on the machine.
+//
+// Detachment flags (DETACHED_PROCESS | CREATE_NO_WINDOW) ensure that
+// the AI process keeps running after Smartcore exits — the file
+// handle Windows holds on Smartcore.exe is released the moment we
+// return from main.
 package ailauncher
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync/atomic"
 	"syscall"
-	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
-// Launcher is a one-shot AI client spawner. It does NOT loop or restart.
-// The server tells the agent (via the heartbeat response) to launch the
-// AI client; on success the agent acks and the server stops asking. The
-// agent never relaunches the AI on its own — the user explicitly asked
-// for "launch once, then leave the AI training session alone".
-//
-// Behaviour:
-//   - Trigger() asks the launcher to attempt a spawn. Concurrent calls
-//     coalesce: only one attempt is in flight at a time.
-//   - If the binary doesn't exist yet (still being downloaded by the
-//     updater), Trigger returns false and the next heartbeat will try
-//     again.
-//   - On a successful spawn, ackFn is called so the server can flip
-//     ai_launched_at and stop sending launch=true on heartbeats.
-//   - The spawned process is detached: if the agent exits, the AI
-//     client survives. Agent does not Wait() on it.
-// SpawnTarget tells the launcher exactly what to spawn — the
-// fully-resolved absolute path and the cwd to run it in. Resolved
-// at launch time by reading the .version marker the updater wrote
-// after its last successful install. Centralising resolution here
-// means the launcher works for both 'exe' (single file) and 'zip'
-// (multi-file extracted tree) without caring which it is.
+// SpawnTarget is what installer's marker resolves to: where the AI
+// entrypoint lives on disk, and what working directory it expects.
 type SpawnTarget struct {
-	Path string // absolute path to the executable
+	Path string // absolute path to the entrypoint EXE
 	CWD  string // working directory; usually filepath.Dir(Path)
 }
 
-// Resolver returns the current spawn target. Error means "no
-// install yet, retry later". Caller (heartbeat) will retry on next
-// tick once the updater has finished landing the package.
-type Resolver func() (SpawnTarget, error)
-
-type Launcher struct {
-	resolve Resolver
-	args    []string
-	ackFn   func(context.Context) error
-
-	inFlight int32 // atomic: 0 or 1
-	done     atomic.Bool
-}
-
-func New(resolve Resolver, args []string, ackFn func(context.Context) error) *Launcher {
-	return &Launcher{resolve: resolve, args: args, ackFn: ackFn}
-}
-
-// Trigger attempts to launch the AI client. Returns true if the spawn
-// succeeded (and the ack to the server succeeded). Returns false on
-// transient failure — the caller should retry on the next heartbeat.
+// SpawnDetached launches target.Path as a detached child process.
+// The child inherits the current user's token (no UAC, no SYSTEM).
+// Returns once the child has started — does NOT Wait() on it.
 //
-// Once Trigger returns true, all subsequent calls are no-ops: this
-// launcher is intentionally single-fire per agent process lifetime.
-func (l *Launcher) Trigger(ctx context.Context) bool {
-	if l.done.Load() {
-		return true
-	}
-	if !atomic.CompareAndSwapInt32(&l.inFlight, 0, 1) {
-		return false // another Trigger is currently working
-	}
-	defer atomic.StoreInt32(&l.inFlight, 0)
-
-	if err := l.attemptLaunch(ctx); err != nil {
-		log.Warn().Err(err).Msg("ai client launch attempt failed; will retry on next heartbeat")
-		return false
-	}
-
-	ackCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	if err := l.ackFn(ackCtx); err != nil {
-		// Spawn worked but the server didn't get our ack. Don't mark
-		// done — let the next heartbeat re-trigger so the agent posts
-		// the ack again. Spawning twice would be wrong, so we early-
-		// return done=true here only after a successful ack.
-		log.Warn().Err(err).Msg("ai launched but ack failed; will re-ack")
-		return false
-	}
-
-	l.done.Store(true)
-	log.Info().Msg("ai client launched successfully (one-shot complete)")
-	return true
-}
-
-func (l *Launcher) attemptLaunch(ctx context.Context) error {
-	target, err := l.resolve()
-	if err != nil {
-		return fmt.Errorf("resolve spawn target: %w", err)
+// CreationFlags = DETACHED_PROCESS (0x08) | CREATE_NO_WINDOW (0x08000000):
+//
+//   - DETACHED_PROCESS: child has no console of its own and is not
+//     attached to Smartcore's console. When Smartcore exits seconds
+//     later, the child is unaffected.
+//   - CREATE_NO_WINDOW: no console window flashes on screen during
+//     the brief moment Smartcore's main goroutine is still alive.
+func SpawnDetached(target SpawnTarget) error {
+	if target.Path == "" {
+		return errors.New("empty spawn target")
 	}
 	if _, err := os.Stat(target.Path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("ai entrypoint not present at %s — still downloading?", target.Path)
+			return fmt.Errorf("entrypoint not present at %s", target.Path)
 		}
 		return fmt.Errorf("stat entrypoint: %w", err)
 	}
@@ -114,14 +64,10 @@ func (l *Launcher) attemptLaunch(ctx context.Context) error {
 		cwd = filepath.Dir(target.Path)
 	}
 
-	cmd := exec.CommandContext(ctx, target.Path, l.args...)
+	cmd := exec.Command(target.Path)
 	cmd.Dir = cwd
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-		// CREATE_NO_WINDOW (0x08000000): no console for child.
-		// DETACHED_PROCESS (0x00000008): child has no parent console
-		// and survives the agent's exit cleanly. The agent does NOT
-		// Wait() on it — fire and forget.
+		HideWindow:    true,
 		CreationFlags: 0x08000000 | 0x00000008,
 	}
 
@@ -132,14 +78,9 @@ func (l *Launcher) attemptLaunch(ctx context.Context) error {
 	if cmd.Process != nil {
 		pid = cmd.Process.Pid
 		// Release the handle so the OS can reap the process when it
-		// exits — we don't track the lifecycle.
+		// exits. Smartcore is not tracking lifecycle.
 		_ = cmd.Process.Release()
 	}
-	log.Info().Int("pid", pid).Str("bin", target.Path).Msg("ai client spawned (detached)")
+	log.Info().Int("pid", pid).Str("bin", target.Path).Msg("AI agent spawned (detached, user privileges)")
 	return nil
 }
-
-// Done reports whether this launcher has already completed its one-shot
-// launch. Used for status reporting.
-func (l *Launcher) Done() bool { return l.done.Load() }
-

@@ -194,7 +194,7 @@ func writeOne(f *zip.File, target string) error {
 // or "SAM_NativeSetup/S.A.M_Enterprise_Agent_Setup_Native.exe".
 // We normalise to OS path separators and validate that it stays
 // under the extracted tree (no traversal segments, no abs paths).
-func (u *Updater) installZip(tmpZip, aiRoot, entrypointRaw string) (extractedDir, entrypointRel string, err error) {
+func (u *Installer) installZip(tmpZip, aiRoot, entrypointRaw string) (extractedDir, entrypointRel string, err error) {
 	extracted := filepath.Join(aiRoot, "extracted")
 	staging := filepath.Join(aiRoot, "extracted.staging")
 	old := filepath.Join(aiRoot, "extracted.old")
