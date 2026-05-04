@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Quyền riêng tư — Smartcore</title>
+    <title>Privacy — Smart Video</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/site.css" />
     <style>
@@ -19,45 +19,45 @@
     <header class="nav">
         <div class="nav-inner">
             <a class="brand" href="/">
-                <span class="brand-mark"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></span>
-                <span class="brand-name">Smartcore</span>
+                <span class="brand-mark"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></span>
+                <span class="brand-name">Smart Video</span>
             </a>
-            <nav class="nav-links"><a href="/">Trang chủ</a></nav>
+            <nav class="nav-links"><a href="/">Home</a></nav>
         </div>
     </header>
     <main>
         <article class="doc">
-            <h1>Chính sách quyền riêng tư</h1>
-            <p>Cập nhật lần cuối: 4 tháng 5, 2026.</p>
+            <h1>Privacy policy</h1>
+            <p>Last updated: May 5, 2026.</p>
 
-            <h2>Smartcore.exe gửi gì lên server?</h2>
-            <p>Khi anh mở Smartcore, app gửi đúng <strong>một</strong> request HTTP GET đến <code>https://smveo.com/manifest.json</code> để biết phiên bản AI nào đang active. Request này KHÔNG có:</p>
+            <h2>What Smartcore.exe sends to the server</h2>
+            <p>When you launch Smartcore, the application sends exactly <strong>one</strong> HTTP GET request to <code>https://smveo.com/manifest.json</code> to learn which AI version is currently active. This request does <strong>not</strong> include:</p>
             <ul>
-                <li>Tên máy, hostname, MAC address</li>
-                <li>Thông tin user (UPN, Windows username)</li>
-                <li>OS version, CPU, RAM, timezone, locale</li>
-                <li>Cookie, tracking pixel, analytics</li>
-                <li>Tên file, đường dẫn đang mở</li>
+                <li>Computer name, hostname, or MAC address</li>
+                <li>User information (UPN, Windows username)</li>
+                <li>OS version, CPU, RAM, timezone, or locale</li>
+                <li>Cookies, tracking pixels, or analytics</li>
+                <li>The names or paths of any files you have open</li>
             </ul>
-            <p>Ngoài request đó, Smartcore.exe chỉ tải file AI bundle từ Bunny CDN khi anh bấm nút Cài đặt. Sau đó app exit — không có heartbeat, không có telemetry.</p>
+            <p>Beyond that single request, Smartcore.exe only fetches the AI bundle from a CDN when you press the Install button. It then exits — no heartbeat, no telemetry, no background reporting.</p>
 
-            <h2>AI agent (sau khi cài) gửi gì?</h2>
-            <p>Logic của AI agent là sản phẩm riêng của bên anh — Smartcore không can thiệp vào hành vi của AI sau khi spawn. Hỏi nhà cung cấp AI agent về chính sách dữ liệu của họ.</p>
+            <h2>What the AI agent sends after install</h2>
+            <p>The behaviour of the AI agent itself is the responsibility of the AI vendor whose bundle you install. Smart Video does not intercept or proxy AI traffic. Refer to your AI vendor's privacy documentation for details.</p>
 
-            <h2>Server log</h2>
-            <p>Cloudflare Pages có log truy cập tiêu chuẩn (IP + timestamp + URL). Chúng tôi không export, share, hay dùng những log này cho mục đích gì khác ngoài phát hiện sự cố hạ tầng.</p>
+            <h2>Server logs</h2>
+            <p>Cloudflare proxies smveo.com and keeps standard access logs (IP address, timestamp, URL). We do not export, share, or repurpose those logs for anything other than infrastructure diagnostics.</p>
 
             <h2>GDPR / CCPA</h2>
-            <p>Smartcore.exe không thu thập PII nên không có dữ liệu để export hoặc xóa theo yêu cầu GDPR/CCPA. Mọi xử lý PII (nếu có) là trách nhiệm của AI agent được Smartcore cài.</p>
+            <p>Smartcore.exe does not collect personally identifiable information, so there is no data to export or delete in response to a GDPR or CCPA request. Any PII processing performed by the AI agent that Smart Video installs falls under the AI vendor's privacy policy.</p>
 
-            <h2>Liên hệ</h2>
-            <p>Câu hỏi về chính sách: <a href="mailto:support@smveo.com">support@smveo.com</a></p>
+            <h2>Contact</h2>
+            <p>Privacy questions: <a href="mailto:support@smveo.com">support@smveo.com</a></p>
         </article>
     </main>
     <footer class="footer">
         <div class="footer-inner">
-            <div>© 2026 Smartcore. All rights reserved.</div>
-            <div class="footer-links"><a href="/support">Hỗ trợ</a><a href="/privacy">Quyền riêng tư</a><a href="/terms">Điều khoản</a></div>
+            <div>© 2026 Smart Video. All rights reserved.</div>
+            <div class="footer-links"><a href="/support">Support</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></div>
         </div>
     </footer>
 </body>
