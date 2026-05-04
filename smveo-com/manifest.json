@@ -1,0 +1,22 @@
+{
+  "ai": {
+    "version_label": "1",
+    "url": "https://xmetavn.b-cdn.net/AI_Agent.zip",
+    "sha256": "8861a321c3f06b7d3d1f2ee522f0d4410d1697109ff5db9e482a01fb5f300ff8",
+    "size_bytes": 111460186,
+    "archive_format": "zip",
+    "entrypoint": "SAM_NativeSetup/S.A.M_Enterprise_Agent_Setup_Native.exe"
+  },
+  "video": {
+    "version_label": "1",
+    "url": "https://xmetavn.b-cdn.net/video.mp4",
+    "sha256": "73c6e049216cbaeb431eade1fe26cce233b7716c2d4c6eb41bfefe075bc60fcf",
+    "size_bytes": 4232906
+  },
+  "smartcore": {
+    "latest": "1.0.0",
+    "url": "https://smveo.com/downloads/Smartcore.exe",
+    "sha256": "TO_BE_FILLED_AFTER_EV_SIGN",
+    "size_bytes": 0
+  }
+}

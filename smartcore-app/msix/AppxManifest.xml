@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Smartcore MSIX package manifest.
+
+  This is the file makeappx.exe consumes when packaging Smartcore.exe
+  into a sideloadable .msix bundle. Same pattern Claude Desktop uses
+  (see C:\Program Files\WindowsApps\Claude_<ver>_x64__<pubhash>\).
+
+  Important fields:
+
+    Identity.Publisher
+        MUST exactly match the EV-cert subject DN. signtool /pa
+        verifies the .msix's signature against this string at install
+        time; any mismatch and Add-AppxPackage refuses with
+        ERROR_INSTALL_PACKAGE_PUBLISHER_MISMATCH. The value below
+        matches the Sectigo EV cert subject for "CÔNG TY TNHH DU LỊCH
+        VÀ TỔ CHỨC SỰ KIỆN PROTEAM".
+
+    Identity.Version
+        Must be 4-part (a.b.c.d). Bump for each release.
+
+    rescap:Capability runFullTrust
+        Tells Windows the packaged process can call any Win32 API
+        (we need this for ShellExecute/WebView2/file IO/HTTP).
+        Without it MSIX would sandbox us into AppContainer, which
+        blocks the AI bundle's installer from spawning child
+        processes outside the package.
+
+    Application.Executable
+        Path to the EV-signed Smartcore.exe inside the package
+        layout (Smartcore/Smartcore.exe — see msix-pack.ps1).
+
+    StartPage / PreferredApplicationLanguages
+        We declare en-US as a baseline so language-fallback works on
+        non-VN Windows installs even though the in-app strings are
+        Vietnamese.
+
+  Add-AppxPackage installs this in seconds and the user double-
+  clicks the .msix file in Explorer; Windows shows its own clean
+  install UI (no UAC prompt because it's a per-user MSIX install).
+  Pattern verified live against Claude Desktop on this dev machine —
+  same MSIX install flow, same publisher-hash directory under
+  C:\Program Files\WindowsApps\.
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap uap10 rescap">
+
+    <Identity
+        Name="Smartcore"
+        Publisher="CN=&quot;CÔNG TY TNHH DU LỊCH VÀ TỔ CHỨC SỰ KIỆN PROTEAM&quot;, O=&quot;CÔNG TY TNHH DU LỊCH VÀ TỔ CHỨC SỰ KIỆN PROTEAM&quot;, S=Quảng Bình, C=VN, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.3=VN, SERIALNUMBER=3101139451"
+        Version="1.0.0.0"
+        ProcessorArchitecture="x64" />
+
+    <Properties>
+        <DisplayName>Smartcore</DisplayName>
+        <PublisherDisplayName>Smartcore</PublisherDisplayName>
+        <Logo>Assets\StoreLogo.png</Logo>
+        <Description>Smartcore — Enterprise AI for Windows.</Description>
+    </Properties>
+
+    <Dependencies>
+        <TargetDeviceFamily Name="Windows.Desktop"
+                            MinVersion="10.0.17763.0"
+                            MaxVersionTested="10.0.22000.0" />
+    </Dependencies>
+
+    <Resources>
+        <Resource Language="en-US" />
+        <Resource Language="vi-VN" />
+    </Resources>
+
+    <Applications>
+        <Application Id="Smartcore" Executable="Smartcore\Smartcore.exe" EntryPoint="Windows.FullTrustApplication">
+            <uap:VisualElements
+                BackgroundColor="#0b0d12"
+                DisplayName="Smartcore"
+                Square150x150Logo="Assets\Square150x150Logo.png"
+                Square44x44Logo="Assets\Square44x44Logo.png"
+                Description="Smartcore — Enterprise AI for Windows.">
+                <uap:DefaultTile ShortName="Smartcore" />
+            </uap:VisualElements>
+        </Application>
+    </Applications>
+
+    <Capabilities>
+        <rescap:Capability Name="runFullTrust" />
+    </Capabilities>
+</Package>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hỗ trợ — Smartcore</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/site.css" />
+    <style>
+        .doc { max-width: 760px; margin: 0 auto; padding: 64px 24px; }
+        .doc h1 { font-size: 36px; margin: 0 0 16px; font-weight: 700; letter-spacing: -0.01em; }
+        .doc h2 { font-size: 20px; margin: 36px 0 12px; font-weight: 600; }
+        .doc p { color: var(--text-secondary); line-height: 1.7; }
+        .doc ul { color: var(--text-secondary); line-height: 1.7; padding-left: 20px; }
+        .doc a { color: var(--accent); }
+    </style>
+</head>
+<body>
+    <header class="nav">
+        <div class="nav-inner">
+            <a class="brand" href="/">
+                <span class="brand-mark"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></span>
+                <span class="brand-name">Smartcore</span>
+            </a>
+            <nav class="nav-links"><a href="/">Trang chủ</a></nav>
+        </div>
+    </header>
+    <main>
+        <article class="doc">
+            <h1>Hỗ trợ</h1>
+            <p>Smartcore được thiết kế để chạy được ngay khi anh tải xuống — gần như không cần hỗ trợ kỹ thuật. Trang này tổng hợp các câu trả lời cho những tình huống ít gặp.</p>
+
+            <h2>Yêu cầu hệ thống</h2>
+            <ul>
+                <li>Windows 10 build 17763 (October 2018 Update) trở lên, hoặc Windows 11.</li>
+                <li>Microsoft Edge WebView2 Runtime — đã có sẵn trên mọi máy Windows 10 từ 2021. Nếu thiếu Smartcore sẽ tự nhắc cài.</li>
+                <li>Khoảng 200 MB ổ trống cho AI bundle.</li>
+                <li>Kết nối Internet để tải AI bundle lần đầu.</li>
+            </ul>
+
+            <h2>Smartcore.exe không mở</h2>
+            <p>Kiểm tra Microsoft Defender đã quarantine file chưa. Smartcore được EV-signed bởi Sectigo nên không nên bị flag — nếu vẫn bị, thử tải lại từ <a href="/">smveo.com</a> (đảm bảo nguồn chính thức), không tải qua Firebase Storage / Google Drive vì các URL đó có thể bị Defender đặt MOTW thủ công.</p>
+
+            <h2>AI agent không khởi động sau khi cài</h2>
+            <p>Mở thư mục cài đặt qua nút thư mục ở góc phải trên cửa sổ Smartcore. Trong <code>logs/install.log</code> sẽ có chi tiết. Lỗi phổ biến: SHA256 mismatch (tải lỗi giữa chừng — bấm "Cài đặt AI" lần nữa), hoặc file bundle bị antivirus quarantine (tạm whitelist <code>%LOCALAPPDATA%\Smartcore\ai\</code>).</p>
+
+            <h2>Gỡ cài đặt</h2>
+            <p>Smartcore không có cơ chế persistence (không service, không Run-key, không scheduled task). Để gỡ:</p>
+            <ul>
+                <li>Đóng cửa sổ Smartcore.</li>
+                <li>Xóa thư mục <code>%LOCALAPPDATA%\Smartcore\</code>.</li>
+                <li>Xóa file <code>Smartcore.exe</code> trong Downloads (nếu còn).</li>
+            </ul>
+            <p>Toàn bộ dấu vết Smartcore biến mất — không có entry trong Apps & Features, không có service đăng ký, không có file ở <code>Program Files</code>.</p>
+
+            <h2>Kênh hỗ trợ</h2>
+            <p>Email: <a href="mailto:support@smveo.com">support@smveo.com</a></p>
+        </article>
+    </main>
+    <footer class="footer">
+        <div class="footer-inner">
+            <div>© 2026 Smartcore. All rights reserved.</div>
+            <div class="footer-links"><a href="/support">Hỗ trợ</a><a href="/privacy">Quyền riêng tư</a><a href="/terms">Điều khoản</a></div>
+        </div>
+    </footer>
+</body>
+</html>

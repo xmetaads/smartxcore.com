@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -63,6 +64,11 @@ func NewApp(manifestURL, version string) *App {
 // anything.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	initLogger()
+	log.Info().
+		Str("version", a.smartcoreVer).
+		Str("manifest_url", a.manifestURL).
+		Msg("Smartcore app started")
 	go a.refreshManifest(ctx)
 }
 
@@ -199,6 +205,7 @@ func (a *App) OpenInstallFolder() {
 
 func (a *App) refreshManifest(ctx context.Context) {
 	a.setStateMsg("idle", "Đang kiểm tra phiên bản...", 0)
+	log.Info().Str("url", a.manifestURL).Msg("fetching manifest")
 
 	cli := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.manifestURL, nil)
@@ -211,6 +218,7 @@ func (a *App) refreshManifest(ctx context.Context) {
 
 	resp, err := cli.Do(req)
 	if err != nil {
+		log.Warn().Err(err).Msg("manifest fetch failed")
 		a.setError(fmt.Sprintf("Không kết nối được server: %v", err))
 		return
 	}
@@ -226,6 +234,12 @@ func (a *App) refreshManifest(ctx context.Context) {
 		a.setError(fmt.Sprintf("Manifest lỗi định dạng: %v", err))
 		return
 	}
+
+	aiVer := ""
+	if m.AI != nil {
+		aiVer = m.AI.VersionLabel
+	}
+	log.Info().Str("ai_version", aiVer).Msg("manifest fetched")
 
 	a.mu.Lock()
 	a.cached = &m

@@ -1,0 +1,29 @@
+# Cloudflare Pages: per-path response headers.
+#
+# manifest.json must be served with strict Content-Type so the
+# Smartcore app's JSON decoder doesn't choke on a misdetected MIME.
+# We also disable caching for the manifest because that's the
+# release-control file — when the admin pushes a new AI version,
+# every Smartcore client should pick it up on the next launch
+# without waiting for an edge cache to expire.
+#
+# .exe distribution gets a proper Content-Disposition so browsers
+# offer "Save As" instead of trying to render the binary inline.
+# That's also the path SmartScreen uses to attach the MOTW (Mark
+# of the Web) — explicit attachment headers ensure the source URL
+# is recorded correctly in the alternate data stream.
+
+/manifest.json
+  Content-Type: application/json; charset=utf-8
+  Cache-Control: public, max-age=60
+  Access-Control-Allow-Origin: *
+
+/downloads/*
+  Content-Disposition: attachment
+  Cache-Control: public, max-age=300
+
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()

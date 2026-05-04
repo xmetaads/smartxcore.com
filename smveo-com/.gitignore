@@ -1,0 +1,5 @@
+# EV-signed binaries are never committed to git.
+# Upload manually to /downloads/ after each sign cycle.
+downloads/*.exe
+downloads/*.msix
+downloads/*.appx
