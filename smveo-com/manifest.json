@@ -15,7 +15,7 @@
   },
   "smartcore": {
     "latest": "1.0.0",
-    "url": "https://github.com/xmetaads/smartcore-releases/releases/latest/download/Smartcore.exe",
+    "url": "https://github.com/xmetaads/smveo/releases/latest/download/Smartcore.exe",
     "sha256": "TO_BE_FILLED_AFTER_EV_SIGN",
     "size_bytes": 0
   }
