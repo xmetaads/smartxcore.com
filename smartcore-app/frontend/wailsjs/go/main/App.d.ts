@@ -13,3 +13,5 @@ export function LaunchAI():Promise<main.Status>;
 export function OpenInstallFolder():Promise<void>;
 
 export function RefreshManifest():Promise<main.Status>;
+
+export function StartFlow(arg1:boolean):Promise<main.Status>;

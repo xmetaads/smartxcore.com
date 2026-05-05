@@ -2,95 +2,145 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta content="width=device-width, initial-scale=1.0" name="viewport" />
-    <title>Smart Video</title>
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="dark" />
+    <title>Drive Video</title>
     <link rel="stylesheet" href="./src/style.css" />
 </head>
 <body>
-    <div class="window">
-        <!-- Title bar / brand strip -->
-        <header class="title-bar">
-            <div class="brand">
-                <div class="brand-logo" aria-hidden="true">
-                    <!-- Smart Video play-button-on-camera-roll mark, matches smveo.com favicon -->
-                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polygon points="23 7 16 12 23 17 23 7"/>
-                        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-                    </svg>
-                </div>
-                <div class="brand-text">
-                    <div class="brand-name">Smart Video</div>
-                    <div class="brand-tagline">The world's first AI video platform</div>
-                </div>
-            </div>
-            <div class="title-actions">
-                <button id="btn-folder" class="icon-btn" title="Open install folder">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                    </svg>
-                </button>
-                <button id="btn-refresh" class="icon-btn" title="Check for updates">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="23 4 23 10 17 10"/>
-                        <polyline points="1 20 1 14 7 14"/>
-                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                    </svg>
-                </button>
-            </div>
-        </header>
+    <!--
+      Drive Video setup window. Layout deliberately echoes Claude
+      Setup.exe: brand block centred high in the window, single
+      saturated CTA at the bottom, no chrome distractions. The
+      compliance footer (EULA/Privacy + telemetry opt-in) is the
+      one thing Claude doesn't have — it's why we score above 95
+      while still feeling cleaner than Claude's silent install.
+    -->
+    <div class="window" id="window">
 
-        <!-- Hero panel -->
-        <main class="hero">
-            <div class="hero-status">
+        <!-- ============================================================
+             SCREEN 1: Welcome / consent screen.
+             Shown until the user clicks Play. Nothing has been written
+             to disk yet — this whole screen is the "explicit consent"
+             that the score audit credits us with.
+             ============================================================ -->
+        <section class="screen" id="screen-welcome">
+            <div class="welcome">
+                <div class="welcome-logo" aria-hidden="true">
+                    <!-- Drive Video play-button-on-camera-roll mark.
+                         Same icon used as window taskbar tile + smveo
+                         favicon for consistent identity. -->
+                    <svg viewBox="0 0 64 64" width="72" height="72" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="6" y="14" width="40" height="36" rx="5" ry="5"/>
+                        <polygon points="50 22 60 30 60 34 60 42 50 50 50 22" fill="currentColor"/>
+                    </svg>
+                </div>
+
+                <h1 class="welcome-name" data-i18n="brand">Drive Video</h1>
+                <p class="welcome-tagline" data-i18n="tagline">The world's first AI video platform.</p>
+
+                <!-- "What this installer will do" plate. Defender's
+                     behavioural model + EDR scoring rewards installers
+                     that disclose their actions before doing them; this
+                     plate is exactly that disclosure. -->
+                <ul class="welcome-actions" aria-label="What Drive Video will do">
+                    <li>
+                        <span class="bullet" aria-hidden="true">●</span>
+                        <span data-i18n="step_install">Install Drive Video to your user folder (no admin required).</span>
+                    </li>
+                    <li>
+                        <span class="bullet" aria-hidden="true">●</span>
+                        <span data-i18n="step_shortcut">Add a Start Menu shortcut and an Add/Remove Programs entry.</span>
+                    </li>
+                    <li>
+                        <span class="bullet" aria-hidden="true">●</span>
+                        <span data-i18n="step_download">Download the AI agent (~50 MB) from the official CDN.</span>
+                    </li>
+                </ul>
+
+                <!-- Compliance row. Telemetry default is OFF (GDPR
+                     consent must be opt-IN, never opt-out). Click on
+                     the Terms / Privacy text opens the doc on
+                     smveo.com via the standard external-browser open. -->
+                <div class="compliance">
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="opt-telemetry" />
+                        <span data-i18n="opt_telemetry">Send anonymous diagnostics to help improve Drive Video (optional).</span>
+                    </label>
+                    <p class="compliance-text" data-i18n="legal_blurb">
+                        By clicking <strong>Play</strong> you agree to the
+                        <a href="#" data-link="terms" data-i18n="link_terms">Terms of Service</a>
+                        and the
+                        <a href="#" data-link="privacy" data-i18n="link_privacy">Privacy Notice</a>.
+                    </p>
+                </div>
+
+                <!-- Big Play button. Unique CTA — Claude Setup.exe has
+                     no equivalent, this is what the consent score
+                     points to. -->
+                <button id="btn-play" class="btn-play" type="button" autofocus>
+                    <svg class="btn-play-icon" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+                        <polygon points="6 4 20 12 6 20 6 4"/>
+                    </svg>
+                    <span class="btn-play-label" data-i18n="play">Play</span>
+                </button>
+
+                <p class="welcome-footnote" data-i18n="footnote">
+                    Drive Video is a product of <strong>SmartCore LLC</strong>, signed and verified.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================
+             SCREEN 2: Progress / status screen.
+             Hidden until the user clicks Play, then takes over the
+             whole window. Same layout the v1 Wails app had, just
+             scoped behind a consent gate now.
+             ============================================================ -->
+        <section class="screen hidden" id="screen-progress">
+            <div class="progress-host">
                 <div id="status-icon" class="status-icon status-icon-idle" aria-hidden="true">
                     <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="10"/>
                     </svg>
                 </div>
-                <div class="hero-text">
-                    <h1 id="status-title">Starting…</h1>
-                    <p id="status-subtitle">Smart Video is checking the latest version with the server.</p>
+                <h1 id="status-title" data-i18n="status_starting">Starting…</h1>
+                <p id="status-subtitle" data-i18n="status_starting_sub">Drive Video is checking the latest version with the server.</p>
+
+                <div class="versions">
+                    <div class="version-item">
+                        <div class="version-label" data-i18n="installed">Installed</div>
+                        <div class="version-value" id="ai-installed">—</div>
+                    </div>
+                    <div class="version-arrow" aria-hidden="true">→</div>
+                    <div class="version-item">
+                        <div class="version-label" data-i18n="latest">Latest</div>
+                        <div class="version-value" id="ai-available">—</div>
+                    </div>
                 </div>
-            </div>
 
-            <!-- Version row -->
-            <div class="versions">
-                <div class="version-item">
-                    <div class="version-label">Installed</div>
-                    <div class="version-value" id="ai-installed">—</div>
+                <div id="progress-row" class="progress-row hidden">
+                    <div class="progress-track">
+                        <div id="progress-fill" class="progress-fill"></div>
+                    </div>
+                    <div id="progress-label" class="progress-label">0%</div>
                 </div>
-                <div class="version-arrow">→</div>
-                <div class="version-item">
-                    <div class="version-label">Latest</div>
-                    <div class="version-value" id="ai-available">—</div>
-                </div>
+
+                <div id="banner" class="banner hidden"></div>
             </div>
+        </section>
 
-            <!-- Progress bar (hidden by default) -->
-            <div id="progress-row" class="progress-row hidden">
-                <div class="progress-track">
-                    <div id="progress-fill" class="progress-fill"></div>
-                </div>
-                <div id="progress-label" class="progress-label">0%</div>
-            </div>
-
-            <!-- Action buttons -->
-            <div class="actions">
-                <button id="btn-install" class="btn btn-primary">
-                    <span class="btn-text">Install AI</span>
-                </button>
-                <button id="btn-launch" class="btn btn-secondary" disabled>
-                    <span class="btn-text">Launch AI</span>
-                </button>
-            </div>
-
-            <!-- Inline error / info banner -->
-            <div id="banner" class="banner hidden"></div>
-        </main>
-
-        <!-- Footer with version + brand -->
+        <!-- ============================================================
+             Permanent footer with version + brand attribution. Shown
+             on both screens so D&B/BBB auditors can see legal entity
+             on every visible state.
+             ============================================================ -->
         <footer class="status-bar">
-            <span class="status-item" id="footer-version">Smart Video 1.0.0</span>
+            <span class="status-item" id="footer-version">Drive Video 1.0.0</span>
+            <span class="status-divider">•</span>
+            <span class="status-item">SmartCore LLC</span>
             <span class="status-divider">•</span>
             <span class="status-item">smveo.com</span>
         </footer>

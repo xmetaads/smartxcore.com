@@ -50,11 +50,17 @@ import (
 // uninstaller reads this same file and must agree byte-for-byte
 // with whatever the installer wrote.
 const (
+	// installFolderName / uninstallKeyName / installedExeName are
+	// the on-disk identifiers — kept stable as "SmartVideo" /
+	// "Smartcore.exe" so a user upgrading from the v1.0.0 build
+	// keeps their existing install location and Add/Remove entry.
+	// User-visible names ("Drive Video" / "Drive Video.lnk") are
+	// brand strings only; they don't appear in any path.
 	installFolderName = "SmartVideo"
 	installedExeName  = "Smartcore.exe"
-	startMenuShortcut = "Smart Video.lnk"
 	uninstallKeyName  = "SmartVideo"
-	displayName       = "Smart Video"
+	startMenuShortcut = "Drive Video.lnk"
+	displayName       = "Drive Video"
 	publisherDisplay  = "SmartCore LLC"
 )
 

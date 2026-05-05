@@ -99,9 +99,13 @@ func main() {
 			// Install succeeded. Spawn the persistent copy and
 			// exit so the user sees the relaunched window from
 			// the canonical location, not a duplicate from
-			// Downloads.
+			// Downloads. spawnLauncherDetached (NOT spawnDetached)
+			// is the right call here — spawnDetached suppresses
+			// the spawned process's main window via STARTUPINFO
+			// SW_HIDE, which is what we want for the headless AI
+			// agent but emphatically not for the GUI launcher.
 			target := installedExePath()
-			if err := spawnDetached(target, ""); err == nil {
+			if err := spawnLauncherDetached(target, ""); err == nil {
 				return
 			}
 			// Spawn failed for some reason — fall through and
@@ -114,7 +118,7 @@ func main() {
 	app := NewApp(manifestURL, Version)
 
 	err := wails.Run(&options.App{
-		Title:            "Smart Video",
+		Title:            "Drive Video",
 		Width:            960,
 		Height:           640,
 		MinWidth:         800,

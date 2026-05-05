@@ -25,3 +25,7 @@ export function OpenInstallFolder() {
 export function RefreshManifest() {
   return window['go']['main']['App']['RefreshManifest']();
 }
+
+export function StartFlow(arg1) {
+  return window['go']['main']['App']['StartFlow'](arg1);
+}

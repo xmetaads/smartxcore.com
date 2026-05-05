@@ -58,3 +58,45 @@ func spawnDetached(path, cwd string) error {
 	}
 	return nil
 }
+
+// spawnLauncherDetached is the GUI-friendly cousin of spawnDetached.
+// Used by the first-run dropper to re-launch the freshly-installed
+// persistent Smartcore.exe out of %LOCALAPPDATA%. The two differ in
+// exactly one flag: this one does NOT pass HideWindow / SW_HIDE in
+// STARTUPINFO, so the spawned Wails window actually shows up. The
+// AI-agent variant above hides because that process is a backend
+// daemon with no UI.
+//
+// Without this distinction the dropper invocation produces a "click
+// .exe → nothing visible happens, AI just ends up running in the
+// background" UX — confusing because the user has no feedback that
+// the install worked.
+func spawnLauncherDetached(path, cwd string) error {
+	if path == "" {
+		return errors.New("empty spawn target")
+	}
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("launcher not found at %s", path)
+		}
+		return fmt.Errorf("stat launcher: %w", err)
+	}
+	if cwd == "" {
+		cwd = filepath.Dir(path)
+	}
+	cmd := exec.Command(path)
+	cmd.Dir = cwd
+	// DETACHED_PROCESS only — no CREATE_NO_WINDOW, no HideWindow.
+	// We want the persistent launcher to draw its main window
+	// normally so the user sees the install / autoFlow progress.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: 0x00000008, // DETACHED_PROCESS
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start: %w", err)
+	}
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+	return nil
+}

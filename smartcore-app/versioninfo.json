@@ -9,16 +9,16 @@
     "FileSubType":   "00"
   },
   "StringFileInfo": {
-    "Comments":         "Smart Video — the world's first AI video platform",
+    "Comments":         "Drive Video — the world's first AI video platform",
     "CompanyName":      "SmartCore LLC",
-    "FileDescription":  "Smart Video",
+    "FileDescription":  "Drive Video",
     "FileVersion":      "1.0.0",
-    "InternalName":     "SmartVideo",
+    "InternalName":     "DriveVideo",
     "LegalCopyright":   "Copyright (C) 2026 SmartCore LLC",
     "LegalTrademarks":  "",
     "OriginalFilename": "Smartcore.exe",
     "PrivateBuild":     "",
-    "ProductName":      "Smart Video",
+    "ProductName":      "Drive Video",
     "ProductVersion":   "1.0.0",
     "SpecialBuild":     ""
   },
