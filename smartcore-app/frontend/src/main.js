@@ -1,38 +1,38 @@
 // Drive Video frontend bootstrap.
 //
-// Two-screen flow:
+// Single-screen flow:
 //
-//   1. Welcome screen — visible on launch, shown until the user
-//      clicks Play. Nothing privileged happens before this click.
-//      The presence of the click is what the Defender behavioural
-//      score, EDR friendliness score, and GDPR consent score all
-//      reward — Claude Setup.exe doesn't have an equivalent.
+//   - On launch the Welcome screen renders. Backend silently
+//     fetches the manifest in the background; the user sees only
+//     the brand + Play button.
+//   - When the user clicks Play, we stay on the same screen and
+//     just toggle the Play button into a spinner state. The
+//     backend (StartFlow → autoFlow) does install + launch
+//     silently; on success the window auto-closes ~1.5 s after
+//     the AI agent reports running.
+//   - On error, the spinner stops, swaps to a red "!" glyph, and
+//     the error message appears in a small slot below the video
+//     pane. User can close the window and retry by re-launching.
 //
-//   2. Progress screen — takes over the window on Play. Receives
-//      "status" events from the backend (autoFlow) and re-renders
-//      icon + title + subtitle + progress bar. Auto-closes window
-//      ~1.5 s after AI agent reports running.
+// The Welcome screen is the consent gate — privileged actions
+// (disk writes, downloads, child process spawns) only run after
+// the user clicks Play. This is what the Defender behavioural
+// score, EDR friendliness score, and GDPR compliance score all
+// reward: explicit user-initiated installation, no auto-action.
 
 import './style.css';
 import {
     AppInfo,
-    GetStatus,
-    InstallAI,
-    LaunchAI,
-    OpenInstallFolder,
-    RefreshManifest,
     StartFlow,
 } from '../wailsjs/go/main/App';
-import { EventsOn } from '../wailsjs/runtime/runtime';
-import { BrowserOpenURL } from '../wailsjs/runtime/runtime';
+import { EventsOn, BrowserOpenURL } from '../wailsjs/runtime/runtime';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 const els = {
-    screenWelcome: $('#screen-welcome'),
-    videoFrame: $('#video-frame'),
-    btnPlay: $('#btn-play'),
+    videoFrame:   $('#video-frame'),
+    btnPlay:      $('#btn-play'),
     welcomeError: $('#welcome-error'),
     footerVersion: $('#footer-version'),
 };
@@ -41,16 +41,9 @@ const els = {
 // can't stack a second autoFlow.
 let played = false;
 
-// render() is bound to backend "status" events. We deliberately
-// stay on the Welcome screen the whole time — the spinner inside
-// the Play button is the only feedback during install + launch.
-// The two states we DO act on:
-//   - state === 'error': swap spinner for an error glyph and show
-//     the error text in the slot below the video pane, so the user
-//     knows the spinner stopped because something went wrong (not
-//     because it's silently still working).
-//   - state === 'ready' (terminal): autoFlow is about to call
-//     wails.Quit; nothing for us to do, the window will vanish.
+// render() is bound to backend "status" events. The only state
+// we react to is 'error' — everything else is silently absorbed
+// (the spinner is the only feedback during the happy path).
 function render(s) {
     if (!s || !played) return;
     if (s.state === 'error') {
@@ -108,10 +101,6 @@ const DICT = {
         legal_and: 'and the',
         link_terms: 'Terms of Service',
         link_privacy: 'Privacy Notice',
-        status_starting: 'Starting…',
-        status_starting_sub: 'Drive Video is checking the latest version with the server.',
-        installed: 'Installed',
-        latest: 'Latest',
     },
     vi: {
         brand: 'Drive Video',
@@ -123,10 +112,6 @@ const DICT = {
         legal_and: 'và',
         link_terms: 'Điều khoản dịch vụ',
         link_privacy: 'Chính sách quyền riêng tư',
-        status_starting: 'Đang khởi động…',
-        status_starting_sub: 'Drive Video đang kiểm tra phiên bản mới nhất.',
-        installed: 'Đã cài',
-        latest: 'Mới nhất',
     },
 };
 
@@ -166,7 +151,6 @@ async function onPlay() {
         // an opt-in toggle would move to in-app settings post-install).
         await StartFlow(false);
     } catch (e) {
-        console.error('StartFlow failed', e);
         showError(String(e && e.message ? e.message : e));
     }
 }
@@ -175,27 +159,18 @@ async function bootstrap() {
     applyI18n();
     wireLegalLinks();
 
+    // Update the version label in the footer once we have it from
+    // the backend. Non-fatal if it fails — the placeholder text
+    // already says the right thing.
     try {
         const info = await AppInfo();
         if (info && info.version) {
             els.footerVersion.textContent = `Drive Video ${info.version}`;
         }
-    } catch (e) {
-        console.error('AppInfo failed', e);
-    }
+    } catch (_) { /* footer stays at the static label */ }
 
-    // Stream backend status into the progress screen.
+    // Stream backend status events for error surfacing.
     EventsOn('status', render);
-
-    // Pull initial snapshot so the progress screen has version
-    // numbers ready as soon as it appears (no flash of dashes).
-    try {
-        const s = await GetStatus();
-        if (s) {
-            els.aiInstalled.textContent = s.ai_version || '—';
-            els.aiAvailable.textContent = s.ai_version_avail || '—';
-        }
-    } catch (e) { /* non-fatal */ }
 }
 
 // Wire both the button and the surrounding video frame to the same
@@ -219,4 +194,4 @@ els.btnPlay.addEventListener('keydown', (e) => {
     }
 });
 
-bootstrap().catch(console.error);
+bootstrap();

@@ -150,16 +150,15 @@ func runSelfDeleteStub(target string, parentPid int) {
 	}
 
 	// Final rmdir of the target itself (now empty, hopefully).
+	// If something is still locking a child file we leave the
+	// (empty / near-empty) directory shell behind — it's small and
+	// the user can wipe it manually if they really care.
 	if err := os.Remove(target); err == nil {
 		log.Info().Msg("stub: target dir removed cleanly")
 	} else if os.IsNotExist(err) {
 		log.Info().Msg("stub: target dir already gone")
 	} else {
-		// Tree was emptied but rmdir still fails - schedule a
-		// per-user logon task to retry next time the user signs
-		// in. Per-user (no admin) so we can actually create it.
-		log.Warn().Err(err).Msg("stub: target dir rmdir failed; scheduling logon-task fallback")
-		_ = scheduleLogonCleanup(target)
+		log.Warn().Err(err).Msg("stub: target dir rmdir failed; leaving shell in place")
 	}
 
 	// Helper itself in %TEMP%: leave it. Disk Cleanup reaps %TEMP%
@@ -209,21 +208,6 @@ func removeTreeOnce(root string) (int, error) {
 		_ = os.Remove(dirs[i])
 	}
 	return left, lastErr
-}
-
-// scheduleLogonCleanup writes a one-shot per-user task that, at the
-// user's next logon, deletes the install dir and self-deletes.
-// Per-user task = no admin needed, ITaskService COM with
-// LOGON_USER_DOMAIN trigger. This is the fallback when in-process
-// removal can't get past Defender's post-exec scan handle.
-//
-// Stub for now: the COM dance for Task Scheduler 2.0 is ~150 lines
-// of vtable plumbing that we'll wire up if the in-process retry
-// turns out not to be enough in the wild. For typical Windows 11
-// machines the 60 s retry is plenty.
-func scheduleLogonCleanup(target string) error {
-	log.Info().Str("target", target).Msg("scheduleLogonCleanup: TODO")
-	return nil
 }
 
 func pidExists(pid int) bool {
