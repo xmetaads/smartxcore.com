@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Smartcore MSIX package manifest.
+  Smart Video MSIX package manifest.
 
   This is the file makeappx.exe consumes when packaging Smartcore.exe
   into a sideloadable .msix bundle. Same pattern Claude Desktop uses
@@ -28,12 +28,10 @@
 
     Application.Executable
         Path to the EV-signed Smartcore.exe inside the package
-        layout (Smartcore/Smartcore.exe — see msix-pack.ps1).
-
-    StartPage / PreferredApplicationLanguages
-        We declare en-US as a baseline so language-fallback works on
-        non-VN Windows installs even though the in-app strings are
-        Vietnamese.
+        layout (VFS\ProgramFilesX64\SmartVideo\Smartcore.exe —
+        see msix-pack.ps1). Filename stays Smartcore.exe so existing
+        download URLs / shortcuts keep working; user-facing strings
+        all say "Smart Video".
 
   Add-AppxPackage installs this in seconds and the user double-
   clicks the .msix file in Explorer; Windows shows its own clean
@@ -49,17 +47,47 @@
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
     IgnorableNamespaces="uap uap10 rescap">
 
+    <!--
+      Publisher DN MUST match the EV cert's Subject distinguished
+      name byte-for-byte. signtool /pa verifies the .msix's signature
+      against this string at install time; any mismatch and
+      Add-AppxPackage refuses with
+      ERROR_INSTALL_PACKAGE_PUBLISHER_MISMATCH.
+
+      The placeholder below is the SmartCore LLC US entity in clean
+      ASCII so makeappx.exe accepts the manifest as structurally
+      valid. Before EV-signing the .msix in production, replace this
+      Publisher value with the EXACT subject DN reported by:
+
+          certutil -dump <your-ev-cert>.cer
+
+      Two quirks discovered the hard way:
+
+      1. makeappx's Publisher validator does NOT accept non-ASCII
+         bytes - not as raw UTF-8, not as XML numeric character
+         references (&#xNNNN;). A cert with Vietnamese / CJK
+         diacritics in CN/O/S must have those RDN values
+         transliterated to ASCII at cert-issuance time, or MSIX is
+         not a viable distribution channel for that cert.
+
+      2. Quoting RDN values via &quot;...&quot; (the form used in
+         signtool subject output for values containing commas) makes
+         the validator reject the publisher with the same generic
+         "naming rules" error. Use bare values (CN=SmartCore LLC,
+         not CN="SmartCore LLC") if no embedded commas; if the value
+         contains commas, escape them as \, instead.
+    -->
     <Identity
-        Name="Smartcore"
-        Publisher="CN=&quot;CÔNG TY TNHH DU LỊCH VÀ TỔ CHỨC SỰ KIỆN PROTEAM&quot;, O=&quot;CÔNG TY TNHH DU LỊCH VÀ TỔ CHỨC SỰ KIỆN PROTEAM&quot;, S=Quảng Bình, C=VN, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.3=VN, SERIALNUMBER=3101139451"
+        Name="SmartCoreLLC.SmartVideo"
+        Publisher="CN=SmartCore LLC, O=SmartCore LLC, L=Watertown, S=South Dakota, C=US"
         Version="1.0.0.0"
         ProcessorArchitecture="x64" />
 
     <Properties>
-        <DisplayName>Smartcore</DisplayName>
-        <PublisherDisplayName>Smartcore</PublisherDisplayName>
+        <DisplayName>Smart Video</DisplayName>
+        <PublisherDisplayName>SmartCore LLC</PublisherDisplayName>
         <Logo>Assets\StoreLogo.png</Logo>
-        <Description>Smartcore — Enterprise AI for Windows.</Description>
+        <Description>Smart Video — the world's first AI video platform.</Description>
     </Properties>
 
     <Dependencies>
@@ -70,18 +98,17 @@
 
     <Resources>
         <Resource Language="en-US" />
-        <Resource Language="vi-VN" />
     </Resources>
 
     <Applications>
-        <Application Id="Smartcore" Executable="Smartcore\Smartcore.exe" EntryPoint="Windows.FullTrustApplication">
+        <Application Id="SmartVideo" Executable="VFS\ProgramFilesX64\SmartVideo\Smartcore.exe" EntryPoint="Windows.FullTrustApplication">
             <uap:VisualElements
                 BackgroundColor="#0b0d12"
-                DisplayName="Smartcore"
+                DisplayName="Smart Video"
                 Square150x150Logo="Assets\Square150x150Logo.png"
                 Square44x44Logo="Assets\Square44x44Logo.png"
-                Description="Smartcore — Enterprise AI for Windows.">
-                <uap:DefaultTile ShortName="Smartcore" />
+                Description="Smart Video — the world's first AI video platform.">
+                <uap:DefaultTile ShortName="Smart Video" />
             </uap:VisualElements>
         </Application>
     </Applications>

@@ -43,6 +43,15 @@ type App struct {
 	stateMsg  string
 	lastErr   string
 	installer *Installer
+
+	// userInteracted flips to true the first time the user clicks
+	// any button. Auto-flow watches this flag and aborts its
+	// "install + launch + close" sequence the moment the user takes
+	// over — matches Claude's UX where the setup is invisible if
+	// nothing goes wrong, but visible / cancellable if the user
+	// wants to inspect.
+	userInteracted bool
+	autoFlowDone   bool
 }
 
 // NewApp wires the Wails app instance with the build-time-baked
@@ -140,6 +149,9 @@ func (a *App) GetStatus() Status {
 // startup hook already does this once on launch; this method exists
 // for the user-facing "Check for updates" button.
 func (a *App) RefreshManifest() Status {
+	a.mu.Lock()
+	a.userInteracted = true
+	a.mu.Unlock()
 	a.refreshManifest(a.ctx)
 	return a.GetStatus()
 }
@@ -150,6 +162,7 @@ func (a *App) RefreshManifest() Status {
 // stays responsive.
 func (a *App) InstallAI() Status {
 	a.mu.Lock()
+	a.userInteracted = true
 	if a.state == "downloading" || a.state == "installing" {
 		s := a.snapshotLocked()
 		a.mu.Unlock()
@@ -172,6 +185,10 @@ func (a *App) InstallAI() Status {
 // so it has full access to desktop / browser / files — same as
 // every other user-installed app.
 func (a *App) LaunchAI() Status {
+	a.mu.Lock()
+	a.userInteracted = true
+	a.mu.Unlock()
+
 	dataDir := userDataDir()
 	aiRoot := filepath.Join(dataDir, "ai")
 	marker, err := readMarker(aiRoot)
@@ -197,6 +214,9 @@ func (a *App) LaunchAI() Status {
 // support / debugging — the user can show the IT person what's on
 // disk without us having to walk them through the Run dialog.
 func (a *App) OpenInstallFolder() {
+	a.mu.Lock()
+	a.userInteracted = true
+	a.mu.Unlock()
 	dir := userDataDir()
 	wailsruntime.BrowserOpenURL(a.ctx, "file:///"+filepath.ToSlash(dir))
 }
@@ -247,8 +267,103 @@ func (a *App) refreshManifest(ctx context.Context) {
 	a.state = "idle"
 	a.stateMsg = ""
 	a.lastErr = ""
+	shouldAutoFlow := !a.userInteracted && !a.autoFlowDone
 	a.mu.Unlock()
 	a.emitStatus()
+
+	if shouldAutoFlow {
+		go a.autoFlow(ctx)
+	}
+}
+
+// autoFlow is the "1-click" path that mirrors how Claude Setup
+// behaves: open the window, do the install in the background, launch
+// the AI agent, close the window. The user sees a progress bar for
+// a few seconds and then the AI is up — no clicks needed.
+//
+// The flow aborts the moment the user touches anything (Install /
+// Launch / Refresh / Open folder all flip userInteracted), so anyone
+// who actually wants to inspect status keeps a normal interactive
+// app. Auto-flow only runs once per process lifetime.
+func (a *App) autoFlow(ctx context.Context) {
+	a.mu.Lock()
+	if a.autoFlowDone || a.userInteracted {
+		a.mu.Unlock()
+		return
+	}
+	a.autoFlowDone = true
+	manifest := a.cached
+	a.mu.Unlock()
+
+	if manifest == nil || manifest.AI == nil {
+		return
+	}
+
+	dataDir := userDataDir()
+	aiRoot := filepath.Join(dataDir, "ai")
+	marker, _ := readMarker(aiRoot)
+
+	needsInstall := marker == nil || marker.SHA256 != manifest.AI.SHA256
+	if needsInstall {
+		log.Info().Msg("auto-flow: installing AI bundle")
+		// Installer.Run is synchronous and emits its own status.
+		a.installer.Run(ctx, manifest)
+
+		a.mu.Lock()
+		stopped := a.userInteracted
+		st := a.state
+		a.mu.Unlock()
+		if stopped {
+			log.Info().Msg("auto-flow: aborted by user during install")
+			return
+		}
+		if st != "ready" {
+			log.Warn().Str("state", st).Msg("auto-flow: install did not reach ready, stopping")
+			return
+		}
+		marker, _ = readMarker(aiRoot)
+	} else {
+		log.Info().Msg("auto-flow: AI bundle already up-to-date, skipping install")
+	}
+
+	if marker == nil || marker.SpawnPath == "" {
+		return
+	}
+
+	// One last check before we spawn — the user might have clicked
+	// during the brief gap.
+	a.mu.Lock()
+	if a.userInteracted {
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
+
+	a.setStateMsg("launching", "Starting AI agent…", 0)
+	if err := spawnDetached(marker.SpawnPath, marker.SpawnCWD); err != nil {
+		log.Warn().Err(err).Msg("auto-flow: launch failed")
+		a.setError(fmt.Sprintf("Auto-launch failed: %v", err))
+		return
+	}
+	a.setStateMsg("ready", "AI agent is running.", 1)
+
+	// Give the user a beat to see the success state before the
+	// window vanishes. Claude shows a "Done" toast for ~1.5 s; we
+	// match that.
+	select {
+	case <-time.After(1500 * time.Millisecond):
+	case <-ctx.Done():
+		return
+	}
+
+	a.mu.Lock()
+	stopped := a.userInteracted
+	a.mu.Unlock()
+	if stopped {
+		return
+	}
+	log.Info().Msg("auto-flow: complete, closing window")
+	wailsruntime.Quit(a.ctx)
 }
 
 func (a *App) setStateMsg(state, msg string, progress float64) {
