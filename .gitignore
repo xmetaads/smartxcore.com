@@ -74,3 +74,8 @@ temp/
 AI_Agent.zip
 *.zip
 !python.zip
+
+# Smartcore resource artefacts (regenerated per build by build-clean.ps1)
+smartcore-app/rsrc_windows_*.syso
+smartcore-app/resources.res
+smartcore-app/RC[0-9a-f]*

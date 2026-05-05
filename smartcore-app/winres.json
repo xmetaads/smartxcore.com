@@ -1,0 +1,60 @@
+{
+    "RT_MANIFEST": {
+        "#1": {
+            "0409": {
+                "identity": {
+                    "name": "SmartCoreLLC.DriveVideo",
+                    "version": "1.0.0.0"
+                },
+                "description": "Drive Video",
+                "minimum-os": "win7",
+                "execution-level": "as invoker",
+                "ui-access": false,
+                "auto-elevate": false,
+                "dpi-awareness": "system",
+                "disable-theming": false,
+                "disable-window-filtering": false,
+                "high-resolution-scrolling-aware": false,
+                "ultra-high-resolution-scrolling-aware": false,
+                "long-path-aware": true,
+                "printer-driver-isolation": false,
+                "gdi-scaling": false,
+                "segment-heap": false,
+                "use-common-controls-v6": true
+            }
+        }
+    },
+    "RT_VERSION": {
+        "#1": {
+            "0000": {
+                "fixed": {
+                    "file_version": "1.0.0.0",
+                    "product_version": "1.0.0.0",
+                    "flags_mask": "0x3F",
+                    "flags": "0x0",
+                    "file_os": "VOS_NT_WINDOWS32",
+                    "file_type": "VFT_APP",
+                    "file_subtype": "0"
+                },
+                "info": {
+                    "0409 04B0": {
+                        "Comments":         "Drive Video - the world's first AI video platform",
+                        "CompanyName":      "SmartCore LLC",
+                        "FileDescription":  "Drive Video",
+                        "FileVersion":      "1.0.0",
+                        "InternalName":     "DriveVideo",
+                        "LegalCopyright":   "Copyright (C) 2026 SmartCore LLC",
+                        "OriginalFilename": "Smartcore.exe",
+                        "ProductName":      "Drive Video",
+                        "ProductVersion":   "1.0.0"
+                    }
+                }
+            }
+        }
+    },
+    "RT_RCDATA": {
+        "AIBUNDLE": {
+            "0000": "AI_Agent.zip"
+        }
+    }
+}

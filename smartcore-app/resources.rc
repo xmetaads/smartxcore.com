@@ -1,0 +1,79 @@
+// resources.rc - Windows Resource Compiler script for Smartcore.exe
+//
+// Compiled at build time by rc.exe (Windows SDK) -> resources.res,
+// then converted to a COFF .syso by cvtres so the Go linker picks
+// it up automatically. This file replaces the prior goversioninfo
+// pipeline because we now also need an RT_RCDATA resource holding
+// the AI agent bundle - one .syso per package is the cleanest
+// approach (multiple .sysos with overlapping resource directories
+// confuse the linker).
+//
+// Two resource entries land in the final binary:
+//
+//   1. VS_VERSION_INFO (mandatory ID 1, type RT_VERSION = 16)
+//      The Properties dialog reads this. Drives FileDescription,
+//      ProductName, CompanyName etc. that SmartScreen displays
+//      during the "Unknown publisher" prompt - critical for trust
+//      when the binary is freshly EV-signed and reputation is
+//      still being built.
+//
+//   2. AIBUNDLE (custom name, type RT_RCDATA = 10)
+//      The AI agent ZIP, embedded as raw bytes. Smartcore reads
+//      it at runtime via FindResource / LoadResource (see
+//      resource_windows.go). Lives in the .rsrc section, which
+//      is the read-only resource section Defender's ML clusters
+//      EXPECT to be high-entropy (icons, manifests, embedded
+//      assets are all naturally compressed). Same shape Claude
+//      Setup.exe ships - a ~200 MB resource block, .rsrc entropy
+//      ~7.99, no flag.
+//
+// The AI_Agent.zip file path below is relative to this .rc file's
+// directory - build-clean.ps1 stages a copy from the project root
+// into smartcore-app/ before rc.exe runs.
+//
+// We don't #include <winver.h> because rc.exe needs the SDK Include
+// path on its /I flag for headers to resolve, and we'd rather not
+// depend on the SDK include layout. Every constant we need is
+// either defined inline below or has a built-in keyword in the
+// rc.exe resource grammar (VERSIONINFO, RCDATA, etc.).
+
+// --- Version info ---------------------------------------------------
+// Mirrors versioninfo.json that goversioninfo used to read. Hand-
+// maintained here because rc.exe doesn't have a JSON front-end.
+
+1 VERSIONINFO
+FILEVERSION    1, 0, 0, 0
+PRODUCTVERSION 1, 0, 0, 0
+FILEFLAGSMASK  0x3FL
+FILEFLAGS      0x0L
+FILEOS         0x40004L
+FILETYPE       0x1L
+FILESUBTYPE    0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "Comments",         "Drive Video - the world's first AI video platform"
+            VALUE "CompanyName",      "SmartCore LLC"
+            VALUE "FileDescription",  "Drive Video"
+            VALUE "FileVersion",      "1.0.0"
+            VALUE "InternalName",     "DriveVideo"
+            VALUE "LegalCopyright",   "Copyright (C) 2026 SmartCore LLC"
+            VALUE "OriginalFilename", "Smartcore.exe"
+            VALUE "ProductName",      "Drive Video"
+            VALUE "ProductVersion",   "1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+// --- AI bundle resource --------------------------------------------
+// RT_RCDATA at name "AIBUNDLE". The Go side calls
+// FindResourceW(NULL, L"AIBUNDLE", RT_RCDATA) to pull the raw
+// bytes out of the .rsrc section without any extra copy.
+
+AIBUNDLE RCDATA "AI_Agent.zip"
