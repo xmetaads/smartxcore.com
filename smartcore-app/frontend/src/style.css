@@ -73,7 +73,13 @@ body {
 
 .hidden { display: none !important; }
 
-/* === Welcome screen — Claude-style minimal centred layout === */
+/* === Welcome screen — video-player-frame layout ===
+ *
+ * Centred composition: brand name at the top, video frame in the
+ * middle with the Play CTA overlaid (mirrors a real video player's
+ * pre-roll state), legal acknowledgement at the bottom. The frame
+ * is a static placeholder — no real video source is attached.
+ */
 .welcome {
     flex: 1;
     display: flex;
@@ -81,171 +87,137 @@ body {
     align-items: center;
     justify-content: center;
     text-align: center;
-    gap: 14px;
-    max-width: 540px;
+    gap: 22px;
+    max-width: 720px;
+    width: 100%;
     margin: 0 auto;
-}
-
-.welcome-logo {
-    width: 96px;
-    height: 96px;
-    border-radius: 22px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-active));
-    color: var(--accent-fg);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: var(--shadow-glow);
-    margin-bottom: 4px;
 }
 
 .welcome-name {
     margin: 0;
-    font-size: 32px;
+    font-size: 30px;
     font-weight: 600;
     letter-spacing: -0.02em;
 }
 
-.welcome-tagline {
-    margin: 0;
-    color: var(--text-secondary);
-    font-size: 15px;
-}
-
-.welcome-actions {
-    list-style: none;
-    margin: 12px 0 0;
-    padding: 14px 18px;
-    background: var(--bg-panel);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    text-align: left;
-    width: 100%;
-}
-
-.welcome-actions li {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 6px 0;
-    color: var(--text-secondary);
-    font-size: 13.5px;
-}
-
-.welcome-actions .bullet {
-    color: var(--accent);
-    font-size: 12px;
-    line-height: 1.6;
-    flex-shrink: 0;
-}
-
-/* Compliance block: telemetry opt-in + ToS / Privacy. Compact so
- * the Welcome screen still fits in 640 height without scrolling.
+/* Video player frame. 16:9 aspect ratio so it reads as "video"
+ * regardless of window size. The inner .video-frame-inner positions
+ * the Play overlay; outer .video-frame supplies the chrome.
+ *
+ * Style language: deeper black than the window background, soft
+ * inner shadow + 1-pixel inner ring (the white inset border on
+ * YouTube and Vimeo's pre-roll frames), gentle accent glow on
+ * hover so the user knows it's clickable.
  */
-.compliance {
+.video-frame {
     width: 100%;
-    margin-top: 4px;
-    text-align: left;
-}
-
-.checkbox-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
+    max-width: 600px;
+    aspect-ratio: 16 / 9;
+    border-radius: 12px;
+    background: #050608;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+        inset 0 1px 12px rgba(0, 0, 0, 0.6),
+        0 6px 28px rgba(0, 0, 0, 0.45);
     cursor: pointer;
-    color: var(--text-secondary);
-    font-size: 13px;
-    padding: 6px 4px;
-    border-radius: var(--radius-sm);
-    transition: background-color 100ms;
-}
-
-.checkbox-row:hover { background: var(--bg-panel-hover); color: var(--text-primary); }
-
-.checkbox-row input[type=checkbox] {
-    appearance: none;
-    width: 16px;
-    height: 16px;
-    border: 1.5px solid var(--border-default);
-    border-radius: 4px;
-    background: var(--bg-elevated);
-    cursor: pointer;
-    flex-shrink: 0;
-    margin-top: 2px;
     position: relative;
+    overflow: hidden;
+    transition: box-shadow 180ms, transform 120ms;
 }
-.checkbox-row input[type=checkbox]:checked {
-    background: var(--accent);
-    border-color: var(--accent);
+.video-frame:hover {
+    box-shadow:
+        inset 0 0 0 1px rgba(204, 120, 92, 0.30),
+        inset 0 1px 12px rgba(0, 0, 0, 0.6),
+        0 0 0 1px rgba(204, 120, 92, 0.14),
+        0 8px 36px rgba(204, 120, 92, 0.18);
 }
-.checkbox-row input[type=checkbox]:checked::after {
-    content: "";
+.video-frame:active { transform: scale(0.998); }
+
+/* Faint diagonal hatch — gives the empty frame a "no source loaded"
+ * texture without putting an actual placeholder image in the bundle. */
+.video-frame-inner {
     position: absolute;
-    inset: 2px;
-    border-left: 2px solid var(--accent-fg);
-    border-bottom: 2px solid var(--accent-fg);
-    transform: rotate(-45deg) translate(1px, -1px);
-    width: 8px;
-    height: 4px;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+        radial-gradient(ellipse at center, rgba(255, 255, 255, 0.025), transparent 60%),
+        repeating-linear-gradient(
+            45deg,
+            rgba(255, 255, 255, 0.012) 0 12px,
+            transparent 12px 24px
+        );
 }
 
-.compliance-text {
-    margin: 6px 4px 0;
-    font-size: 12px;
-    color: var(--text-tertiary);
-    line-height: 1.5;
-}
-
-.compliance-text a {
-    color: var(--accent);
-    text-decoration: none;
-    border-bottom: 1px dotted var(--accent);
-}
-.compliance-text a:hover { color: var(--accent-hover); }
-
-/* Big Play button. This is the consent-click — Claude has nothing
- * equivalent. Sized + glowed to read as the obvious next action.
- */
-.btn-play {
-    margin-top: 14px;
-    height: 52px;
-    min-width: 180px;
-    padding: 0 30px;
+/* Big circular Play overlay — the unique CTA on this screen. Sized
+ * and glowed so it reads as the only thing to do. */
+.play-overlay {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
     border: 0;
-    border-radius: 26px;
-    font-family: inherit;
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--accent-fg);
     background: var(--accent);
-    box-shadow: var(--shadow-glow);
+    color: var(--accent-fg);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
-    transition: background-color 120ms, transform 80ms, box-shadow 120ms;
-    letter-spacing: 0.01em;
+    box-shadow:
+        0 0 0 8px rgba(204, 120, 92, 0.10),
+        0 0 0 1px rgba(204, 120, 92, 0.30),
+        0 16px 48px rgba(204, 120, 92, 0.35),
+        0 0 60px rgba(204, 120, 92, 0.18);
+    transition: background-color 140ms, transform 100ms, box-shadow 140ms;
+    padding: 0;
+    /* Slight optical centring of the SVG triangle, which is mass-
+     * weighted right of its bounding box. */
+    padding-left: 4px;
 }
-.btn-play:hover  { background: var(--accent-hover); }
-.btn-play:active { background: var(--accent-active); transform: scale(0.98); }
-.btn-play:focus-visible {
-    outline: 2px solid var(--accent-hover);
-    outline-offset: 3px;
+.play-overlay:hover  { background: var(--accent-hover); }
+.play-overlay:active { background: var(--accent-active); transform: scale(0.96); }
+.play-overlay:focus-visible {
+    outline: 3px solid var(--accent-hover);
+    outline-offset: 4px;
 }
-.btn-play:disabled {
+.play-overlay:disabled {
     opacity: 0.55;
     cursor: default;
-    box-shadow: none;
 }
 
-.btn-play-icon { display: block; }
-.btn-play-label { line-height: 1; }
-
-.welcome-footnote {
-    margin: 12px 0 0;
-    font-size: 11.5px;
+/* Compact legal acknowledgement line. Sits at the bottom of the
+ * welcome card; readable but doesn't pull focus from the video
+ * frame. Anchors open the doc on smveo.com via BrowserOpenURL.
+ */
+.welcome-legal {
+    margin: 0;
+    font-size: 12px;
     color: var(--text-tertiary);
+    line-height: 1.55;
+    max-width: 600px;
+}
+.welcome-legal a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--accent);
+}
+.welcome-legal a:hover { color: var(--accent-hover); }
+.welcome-legal strong {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+/* Visually hidden text for screen readers (Play button label). */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 /* === Progress screen (post-click) === */

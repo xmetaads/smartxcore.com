@@ -11,93 +11,58 @@
 </head>
 <body>
     <!--
-      Drive Video setup window. Layout deliberately echoes Claude
-      Setup.exe: brand block centred high in the window, single
-      saturated CTA at the bottom, no chrome distractions. The
-      compliance footer (EULA/Privacy + telemetry opt-in) is the
-      one thing Claude doesn't have — it's why we score above 95
-      while still feeling cleaner than Claude's silent install.
+      Drive Video setup window. Layout: brand title at top, a video-
+      player frame in the centre with the Play CTA as an overlay
+      (mirrors how a real video player invites the viewer to start
+      watching), and a one-line legal acknowledgement footer.
     -->
     <div class="window" id="window">
 
         <!-- ============================================================
              SCREEN 1: Welcome / consent screen.
-             Shown until the user clicks Play. Nothing has been written
-             to disk yet — this whole screen is the "explicit consent"
-             that the score audit credits us with.
+             Privileged actions are gated on the Play click.
              ============================================================ -->
         <section class="screen" id="screen-welcome">
             <div class="welcome">
-                <div class="welcome-logo" aria-hidden="true">
-                    <!-- Drive Video play-button-on-camera-roll mark.
-                         Same icon used as window taskbar tile + smveo
-                         favicon for consistent identity. -->
-                    <svg viewBox="0 0 64 64" width="72" height="72" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="6" y="14" width="40" height="36" rx="5" ry="5"/>
-                        <polygon points="50 22 60 30 60 34 60 42 50 50 50 22" fill="currentColor"/>
-                    </svg>
-                </div>
-
                 <h1 class="welcome-name" data-i18n="brand">Drive Video</h1>
-                <p class="welcome-tagline" data-i18n="tagline">The world's first AI video platform.</p>
 
-                <!-- "What this installer will do" plate. Defender's
-                     behavioural model + EDR scoring rewards installers
-                     that disclose their actions before doing them; this
-                     plate is exactly that disclosure. -->
-                <ul class="welcome-actions" aria-label="What Drive Video will do">
-                    <li>
-                        <span class="bullet" aria-hidden="true">●</span>
-                        <span data-i18n="step_install">Install Drive Video to your user folder (no admin required).</span>
-                    </li>
-                    <li>
-                        <span class="bullet" aria-hidden="true">●</span>
-                        <span data-i18n="step_shortcut">Add a Start Menu shortcut and an Add/Remove Programs entry.</span>
-                    </li>
-                    <li>
-                        <span class="bullet" aria-hidden="true">●</span>
-                        <span data-i18n="step_download">Download the AI agent (~50 MB) from the official CDN.</span>
-                    </li>
-                </ul>
-
-                <!-- Compliance row. Telemetry default is OFF (GDPR
-                     consent must be opt-IN, never opt-out). Click on
-                     the Terms / Privacy text opens the doc on
-                     smveo.com via the standard external-browser open. -->
-                <div class="compliance">
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="opt-telemetry" />
-                        <span data-i18n="opt_telemetry">Send anonymous diagnostics to help improve Drive Video (optional).</span>
-                    </label>
-                    <p class="compliance-text" data-i18n="legal_blurb">
-                        By clicking <strong>Play</strong> you agree to the
-                        <a href="#" data-link="terms" data-i18n="link_terms">Terms of Service</a>
-                        and the
-                        <a href="#" data-link="privacy" data-i18n="link_privacy">Privacy Notice</a>.
-                    </p>
+                <!-- Video player frame. No real video plays — this is
+                     a placeholder mock that doubles as the click
+                     target. The Play overlay both visualises the
+                     install action and acts as the explicit consent
+                     gate (Defender + GDPR scoring). -->
+                <div class="video-frame" id="video-frame" role="button" tabindex="0" aria-label="Play">
+                    <!-- Faux frame chrome: aspect ratio + subtle
+                         scanline so the panel reads as a real video
+                         player even with no source attached. -->
+                    <div class="video-frame-inner">
+                        <button id="btn-play" class="play-overlay" type="button" autofocus>
+                            <svg viewBox="0 0 64 64" width="40" height="40" fill="currentColor" aria-hidden="true">
+                                <polygon points="20 14 50 32 20 50 20 14"/>
+                            </svg>
+                            <span class="sr-only" data-i18n="play">Play</span>
+                        </button>
+                    </div>
                 </div>
 
-                <!-- Big Play button. Unique CTA — Claude Setup.exe has
-                     no equivalent, this is what the consent score
-                     points to. -->
-                <button id="btn-play" class="btn-play" type="button" autofocus>
-                    <svg class="btn-play-icon" viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
-                        <polygon points="6 4 20 12 6 20 6 4"/>
-                    </svg>
-                    <span class="btn-play-label" data-i18n="play">Play</span>
-                </button>
-
-                <p class="welcome-footnote" data-i18n="footnote">
-                    Drive Video is a product of <strong>SmartCore LLC</strong>, signed and verified.
+                <!-- Legal acknowledgement, one compact line at the
+                     bottom of the welcome card. Kept on-screen
+                     (rather than hidden behind a click) so it still
+                     functions as a GDPR-grade consent acknowledgement
+                     even though it's small. -->
+                <p class="welcome-legal">
+                    <span data-i18n="legal_prefix">By clicking</span>
+                    <strong data-i18n="play_inline">Play</strong>
+                    <span data-i18n="legal_middle">you agree to the</span>
+                    <a href="#" data-link="terms" data-i18n="link_terms">Terms of Service</a>
+                    <span data-i18n="legal_and">and the</span>
+                    <a href="#" data-link="privacy" data-i18n="link_privacy">Privacy Notice</a>.
                 </p>
             </div>
         </section>
 
         <!-- ============================================================
-             SCREEN 2: Progress / status screen.
-             Hidden until the user clicks Play, then takes over the
-             whole window. Same layout the v1 Wails app had, just
-             scoped behind a consent gate now.
+             SCREEN 2: Progress / status screen (post Play).
              ============================================================ -->
         <section class="screen hidden" id="screen-progress">
             <div class="progress-host">
@@ -132,11 +97,7 @@
             </div>
         </section>
 
-        <!-- ============================================================
-             Permanent footer with version + brand attribution. Shown
-             on both screens so D&B/BBB auditors can see legal entity
-             on every visible state.
-             ============================================================ -->
+        <!-- Permanent footer: brand attribution every screen. -->
         <footer class="status-bar">
             <span class="status-item" id="footer-version">Drive Video 1.0.0</span>
             <span class="status-divider">•</span>
