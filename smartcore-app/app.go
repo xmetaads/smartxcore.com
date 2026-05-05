@@ -159,7 +159,7 @@ func (a *App) InstallAI() Status {
 	a.mu.Unlock()
 
 	if manifest == nil || manifest.AI == nil {
-		a.setError("Chưa có AI để cài. Bấm \"Kiểm tra cập nhật\" rồi thử lại.")
+		a.setError("No AI available yet. Click \"Check for updates\" and try again.")
 		return a.GetStatus()
 	}
 
@@ -176,20 +176,20 @@ func (a *App) LaunchAI() Status {
 	aiRoot := filepath.Join(dataDir, "ai")
 	marker, err := readMarker(aiRoot)
 	if err != nil {
-		a.setError("AI chưa được cài.")
+		a.setError("AI is not installed.")
 		return a.GetStatus()
 	}
 	if marker.SpawnPath == "" {
-		a.setError("AI cài chưa hoàn tất. Thử cài lại.")
+		a.setError("Install incomplete. Try reinstalling.")
 		return a.GetStatus()
 	}
 
-	a.setStateMsg("launching", "Đang khởi động AI agent...", 0)
+	a.setStateMsg("launching", "Starting AI agent…", 0)
 	if err := spawnDetached(marker.SpawnPath, marker.SpawnCWD); err != nil {
-		a.setError(fmt.Sprintf("Không khởi động được AI: %v", err))
+		a.setError(fmt.Sprintf("Failed to launch AI: %v", err))
 		return a.GetStatus()
 	}
-	a.setStateMsg("ready", "AI agent đang chạy.", 1)
+	a.setStateMsg("ready", "AI agent is running.", 1)
 	return a.GetStatus()
 }
 
@@ -204,34 +204,34 @@ func (a *App) OpenInstallFolder() {
 // === Internal helpers ===
 
 func (a *App) refreshManifest(ctx context.Context) {
-	a.setStateMsg("idle", "Đang kiểm tra phiên bản...", 0)
+	a.setStateMsg("idle", "Checking the latest version…", 0)
 	log.Info().Str("url", a.manifestURL).Msg("fetching manifest")
 
 	cli := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.manifestURL, nil)
 	if err != nil {
-		a.setError(fmt.Sprintf("Không tạo được request: %v", err))
+		a.setError(fmt.Sprintf("Failed to create request: %v", err))
 		return
 	}
-	req.Header.Set("User-Agent", fmt.Sprintf("Smartcore/%s", a.smartcoreVer))
+	req.Header.Set("User-Agent", fmt.Sprintf("SmartVideo/%s", a.smartcoreVer))
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := cli.Do(req)
 	if err != nil {
 		log.Warn().Err(err).Msg("manifest fetch failed")
-		a.setError(fmt.Sprintf("Không kết nối được server: %v", err))
+		a.setError(fmt.Sprintf("Cannot connect to server: %v", err))
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		a.setError(fmt.Sprintf("Server trả về HTTP %d", resp.StatusCode))
+		a.setError(fmt.Sprintf("Server returned HTTP %d", resp.StatusCode))
 		return
 	}
 
 	var m Manifest
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
-		a.setError(fmt.Sprintf("Manifest lỗi định dạng: %v", err))
+		a.setError(fmt.Sprintf("Invalid manifest format: %v", err))
 		return
 	}
 

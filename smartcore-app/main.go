@@ -28,7 +28,7 @@ func main() {
 	app := NewApp(manifestURL, Version)
 
 	err := wails.Run(&options.App{
-		Title:            "Smartcore",
+		Title:            "Smart Video",
 		Width:            960,
 		Height:           640,
 		MinWidth:         800,

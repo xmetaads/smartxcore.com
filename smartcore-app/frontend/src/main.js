@@ -87,23 +87,23 @@ function render(s) {
 
     // Icon kind & headline
     let iconKind = 'idle';
-    let title = 'Sẵn sàng';
-    let subtitle = 'Smartcore đã sẵn sàng — bấm cài AI agent để bắt đầu.';
+    let title = 'Ready';
+    let subtitle = 'Smart Video is ready — click Install AI to begin.';
 
     switch (s.state) {
         case 'idle':
             if (s.is_installed && !s.needs_update) {
                 iconKind = 'ready';
-                title = 'AI đã được cài';
-                subtitle = 'Bấm "Khởi động AI" để chạy phiên bản đã cài.';
+                title = 'AI installed';
+                subtitle = 'Click "Launch AI" to run the installed version.';
             } else if (s.needs_update) {
                 iconKind = 'idle';
-                title = 'Có phiên bản mới';
-                subtitle = `Cập nhật từ ${s.ai_version} lên ${s.ai_version_avail}.`;
+                title = 'Update available';
+                subtitle = `Update from ${s.ai_version} to ${s.ai_version_avail}.`;
             } else if (s.ai_version_avail) {
                 iconKind = 'idle';
-                title = 'Chưa cài AI';
-                subtitle = `Phiên bản mới nhất: ${s.ai_version_avail}. Bấm "Cài đặt AI" để bắt đầu.`;
+                title = 'AI not installed';
+                subtitle = `Latest version: ${s.ai_version_avail}. Click "Install AI" to begin.`;
             } else if (s.message) {
                 title = s.message;
                 subtitle = '';
@@ -111,28 +111,28 @@ function render(s) {
             break;
         case 'downloading':
             iconKind = 'loading';
-            title = 'Đang tải AI bundle';
-            subtitle = s.message || 'Đang tải...';
+            title = 'Downloading AI bundle';
+            subtitle = s.message || 'Downloading…';
             break;
         case 'installing':
             iconKind = 'loading';
-            title = 'Đang cài đặt';
-            subtitle = s.message || 'Đang giải nén...';
+            title = 'Installing';
+            subtitle = s.message || 'Extracting…';
             break;
         case 'ready':
             iconKind = 'ready';
-            title = 'AI sẵn sàng';
-            subtitle = s.message || 'AI agent đã được cài đặt.';
+            title = 'AI ready';
+            subtitle = s.message || 'AI agent has been installed.';
             break;
         case 'launching':
             iconKind = 'loading';
-            title = 'Đang khởi động';
-            subtitle = s.message || 'Khởi động AI agent...';
+            title = 'Launching';
+            subtitle = s.message || 'Starting AI agent…';
             break;
         case 'error':
             iconKind = 'error';
-            title = 'Đã xảy ra lỗi';
-            subtitle = s.error || 'Không xác định.';
+            title = 'An error occurred';
+            subtitle = s.error || 'Unknown error.';
             break;
     }
     setIconState(iconKind);
@@ -155,7 +155,7 @@ function render(s) {
     // Buttons
     const busy = s.state === 'downloading' || s.state === 'installing' || s.state === 'launching';
     els.btnInstall.disabled = busy;
-    els.btnInstall.querySelector('.btn-text').textContent = s.needs_update ? 'Cập nhật AI' : (s.is_installed ? 'Cài đặt lại' : 'Cài đặt AI');
+    els.btnInstall.querySelector('.btn-text').textContent = s.needs_update ? 'Update AI' : (s.is_installed ? 'Reinstall' : 'Install AI');
     els.btnLaunch.disabled = busy || !s.is_installed;
 
     // Error banner
@@ -180,7 +180,7 @@ async function bootstrap() {
     try {
         const info = await AppInfo();
         if (info && info.version) {
-            els.footerVersion.textContent = `Smartcore ${info.version}`;
+            els.footerVersion.textContent = `Smart Video ${info.version}`;
         }
     } catch (e) {
         // Non-fatal: footer just stays at the placeholder.

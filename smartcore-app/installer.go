@@ -47,7 +47,7 @@ func NewInstaller(app *App) *Installer {
 // untouched on disk.
 func (i *Installer) Run(ctx context.Context, m *Manifest) {
 	if m == nil || m.AI == nil {
-		i.app.setError("Không có thông tin AI để cài.")
+		i.app.setError("No AI information available to install.")
 		return
 	}
 
@@ -56,12 +56,12 @@ func (i *Installer) Run(ctx context.Context, m *Manifest) {
 
 	if marker, err := readMarker(aiRoot); err == nil && marker.SHA256 == m.AI.SHA256 {
 		// Already installed at this exact SHA. Done.
-		i.app.setStateMsg("ready", "AI đã sẵn sàng.", 1)
+		i.app.setStateMsg("ready", "AI is ready.", 1)
 		return
 	}
 
 	if err := os.MkdirAll(aiRoot, 0o755); err != nil {
-		i.app.setError(fmt.Sprintf("Không tạo được thư mục: %v", err))
+		i.app.setError(fmt.Sprintf("Failed to create directory: %v", err))
 		return
 	}
 
@@ -71,24 +71,24 @@ func (i *Installer) Run(ctx context.Context, m *Manifest) {
 	dlCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	i.app.setStateMsg("downloading", "Đang tải AI bundle...", 0)
+	i.app.setStateMsg("downloading", "Downloading AI bundle…", 0)
 	written, err := i.download(dlCtx, m.AI.URL, m.AI.SizeBytes, tmp)
 	if err != nil {
 		_ = os.Remove(tmp)
-		i.app.setError(fmt.Sprintf("Tải lỗi: %v", err))
+		i.app.setError(fmt.Sprintf("Download failed: %v", err))
 		return
 	}
 	if m.AI.SizeBytes > 0 && written != m.AI.SizeBytes {
 		_ = os.Remove(tmp)
-		i.app.setError(fmt.Sprintf("Kích thước không khớp: tải %d / mong %d", written, m.AI.SizeBytes))
+		i.app.setError(fmt.Sprintf("Size mismatch: got %d, expected %d", written, m.AI.SizeBytes))
 		return
 	}
 
-	i.app.setStateMsg("installing", "Đang xác thực SHA256...", 0.85)
+	i.app.setStateMsg("installing", "Verifying SHA256…", 0.85)
 	got, err := hashFile(tmp)
 	if err != nil {
 		_ = os.Remove(tmp)
-		i.app.setError(fmt.Sprintf("Hash lỗi: %v", err))
+		i.app.setError(fmt.Sprintf("Hash failed: %v", err))
 		return
 	}
 	if got != m.AI.SHA256 {
@@ -97,7 +97,7 @@ func (i *Installer) Run(ctx context.Context, m *Manifest) {
 		return
 	}
 
-	i.app.setStateMsg("installing", "Đang giải nén...", 0.9)
+	i.app.setStateMsg("installing", "Extracting…", 0.9)
 	var spawnPath, spawnCWD string
 	if m.AI.ArchiveFormat == "zip" {
 		extractedDir := filepath.Join(aiRoot, "extracted")
@@ -108,7 +108,7 @@ func (i *Installer) Run(ctx context.Context, m *Manifest) {
 
 		if err := extractZipSafely(tmp, stagingDir); err != nil {
 			_ = os.RemoveAll(stagingDir)
-			i.app.setError(fmt.Sprintf("Giải nén lỗi: %v", err))
+			i.app.setError(fmt.Sprintf("Extract failed: %v", err))
 			return
 		}
 		// Validate entrypoint inside the staged tree before promoting.
@@ -116,7 +116,7 @@ func (i *Installer) Run(ctx context.Context, m *Manifest) {
 		check := filepath.Join(stagingDir, filepath.FromSlash(ep))
 		if st, err := os.Stat(check); err != nil || st.IsDir() {
 			_ = os.RemoveAll(stagingDir)
-			i.app.setError(fmt.Sprintf("Entrypoint %q không tồn tại trong bundle", ep))
+			i.app.setError(fmt.Sprintf("Entrypoint %q not found inside bundle", ep))
 			return
 		}
 		// Promote: extracted → extracted.old → wipe; staging → extracted.
@@ -159,11 +159,11 @@ func (i *Installer) Run(ctx context.Context, m *Manifest) {
 		SpawnPath:     spawnPath,
 		SpawnCWD:      spawnCWD,
 	}); err != nil {
-		i.app.setError(fmt.Sprintf("Lưu marker lỗi: %v", err))
+		i.app.setError(fmt.Sprintf("Failed to write marker: %v", err))
 		return
 	}
 
-	i.app.setStateMsg("ready", "AI đã sẵn sàng. Bấm \"Khởi động AI\" để chạy.", 1)
+	i.app.setStateMsg("ready", "AI is ready. Click \"Launch AI\" to run.", 1)
 }
 
 // download streams the URL to tmp with progress reporting through
@@ -242,7 +242,7 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 		}
 		mb := float64(p.read) / (1024 * 1024)
 		totalMB := float64(p.total) / (1024 * 1024)
-		msg := fmt.Sprintf("Đang tải... %.1f / %.1f MB", mb, totalMB)
+		msg := fmt.Sprintf("Downloading… %.1f / %.1f MB", mb, totalMB)
 		p.app.setStateMsg("downloading", msg, pct)
 	}
 	return n, nil

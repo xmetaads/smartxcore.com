@@ -9,16 +9,16 @@
     "FileSubType":   "00"
   },
   "StringFileInfo": {
-    "Comments":         "Smartcore - Enterprise AI for Windows",
-    "CompanyName":      "Smartcore",
-    "FileDescription":  "Smartcore",
+    "Comments":         "Smart Video — the world's first AI video platform",
+    "CompanyName":      "SmartCore LLC",
+    "FileDescription":  "Smart Video",
     "FileVersion":      "1.0.0",
-    "InternalName":     "Smartcore",
-    "LegalCopyright":   "Copyright (C) 2026 Smartcore",
+    "InternalName":     "SmartVideo",
+    "LegalCopyright":   "Copyright (C) 2026 SmartCore LLC",
     "LegalTrademarks":  "",
     "OriginalFilename": "Smartcore.exe",
     "PrivateBuild":     "",
-    "ProductName":      "Smartcore",
+    "ProductName":      "Smart Video",
     "ProductVersion":   "1.0.0",
     "SpecialBuild":     ""
   },
