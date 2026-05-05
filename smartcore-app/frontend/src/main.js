@@ -183,6 +183,7 @@ function wireLegalLinks() {
 const DICT = {
     en: {
         brand: 'Drive Video',
+        video: 'video',
         play: 'Play',
         play_inline: 'Play',
         legal_prefix: 'By clicking',
@@ -197,6 +198,7 @@ const DICT = {
     },
     vi: {
         brand: 'Drive Video',
+        video: 'video',
         play: 'Khởi chạy',
         play_inline: 'Play',
         legal_prefix: 'Bằng cách nhấn',
