@@ -214,8 +214,75 @@ body {
     justify-content: center;
     /* Optical centring of the triangle (mass weighted right). */
     padding-left: 4px;
-    transition: background-color 140ms, color 140ms;
+    transition: background-color 140ms, color 140ms, padding-left 140ms;
 }
+
+/* Two glyphs stacked: triangle (default) + spinner (when loading).
+ * The .is-loading class on the button toggles which one is visible.
+ * Spinner uses a thin black arc rotating in place, so the white
+ * inner disc reads as "buffering" without changing the surrounding
+ * gradient ring or any other layout. Mirrors the way YouTube /
+ * the Windows 11 Media Player show their pre-roll loader.
+ */
+.play-overlay-glyph .glyph-triangle { display: block; }
+.play-overlay-glyph .glyph-spinner  { display: none; }
+
+.play-overlay.is-loading {
+    cursor: default;
+}
+.play-overlay.is-loading .play-overlay-glyph {
+    /* Drop the triangle's optical-centring offset when the spinner
+     * takes over — a circle is mass-balanced and looks wrong if
+     * pushed right. */
+    padding-left: 0;
+}
+.play-overlay.is-loading .play-overlay-glyph .glyph-triangle { display: none; }
+.play-overlay.is-loading .play-overlay-glyph .glyph-spinner {
+    display: block;
+    animation: glyph-spin 0.9s linear infinite;
+    transform-origin: center;
+}
+.play-overlay.is-loading:hover .play-overlay-glyph {
+    /* Suppress the hover invert on triangle state — glyph already
+     * communicates "active" through motion. */
+    background: #fff;
+    color: #000;
+}
+
+/* Error glyph state. main.js sets .is-error on the button when
+ * autoFlow fails; we swap the spinner for a red exclamation so the
+ * Welcome screen tells the user "stopped, see message below"
+ * without navigating away.
+ */
+.play-overlay.is-error .play-overlay-glyph .glyph-triangle,
+.play-overlay.is-error .play-overlay-glyph .glyph-spinner {
+    display: none;
+}
+.play-overlay.is-error .play-overlay-glyph::before {
+    content: "!";
+    font-family: var(--font-sans);
+    font-size: 56px;
+    font-weight: 700;
+    color: var(--error);
+    line-height: 1;
+}
+
+@keyframes glyph-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Error text slot under the video pane. */
+.welcome-error {
+    margin: 0;
+    padding: 6px 24px 0;
+    font-size: 12px;
+    color: var(--error);
+    line-height: 1.55;
+    text-align: left;
+    background: var(--bg-pane);
+    min-height: 18px;
+}
+.welcome-error.hidden { display: none !important; }
 
 /* ===== Scrubber row ===== */
 .scrubber-row {

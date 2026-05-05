@@ -41,17 +41,38 @@
                     </div>
                 </header>
 
-                <!-- ===== Video pane + central Play overlay ===== -->
+                <!-- ===== Video pane + central Play overlay =====
+                     The Play overlay has two glyphs stacked in the
+                     same slot: the static play triangle (default
+                     state) and a spinner arc (shown only when the
+                     button has the .is-loading class). When the
+                     user clicks Play we don't navigate anywhere —
+                     we just toggle .is-loading on this button.
+                     The whole "video player loading the source"
+                     metaphor is delivered by that single glyph
+                     swap; nothing else on the screen moves. -->
                 <div class="video-pane" id="video-frame" role="button" tabindex="0" aria-label="Play">
                     <button id="btn-play" class="play-overlay" type="button" autofocus aria-label="Play">
                         <span class="play-overlay-ring" aria-hidden="true"></span>
                         <span class="play-overlay-glyph" aria-hidden="true">
-                            <svg viewBox="0 0 64 64" width="36" height="36" fill="currentColor">
+                            <svg class="glyph-triangle" viewBox="0 0 64 64" width="36" height="36" fill="currentColor">
                                 <polygon points="22 14 50 32 22 50 22 14"/>
+                            </svg>
+                            <svg class="glyph-spinner" viewBox="0 0 50 50" width="42" height="42" fill="none">
+                                <circle cx="25" cy="25" r="20" stroke="rgba(0,0,0,0.10)" stroke-width="4"/>
+                                <circle cx="25" cy="25" r="20" stroke="#000" stroke-width="4" stroke-linecap="round"
+                                    stroke-dasharray="40 200" stroke-dashoffset="0"/>
                             </svg>
                         </span>
                     </button>
                 </div>
+
+                <!-- Error message slot — empty by default. main.js fills
+                     this on autoFlow failure so the user sees what went
+                     wrong without leaving the Welcome screen. Anchored
+                     to the same row as the legal acknowledgement so it
+                     doesn't shove anything around when it appears. -->
+                <p id="welcome-error" class="welcome-error hidden" role="alert"></p>
 
                 <!-- ===== Scrubber row ===== -->
                 <div class="scrubber-row">
@@ -119,42 +140,6 @@
                     <span data-i18n="legal_and">and the</span>
                     <a href="#" data-link="privacy" data-i18n="link_privacy">Privacy Notice</a>.
                 </p>
-            </div>
-        </section>
-
-        <!-- ============================================================
-             SCREEN 2: Progress / status screen (post-Play).
-             ============================================================ -->
-        <section class="screen hidden" id="screen-progress">
-            <div class="progress-host">
-                <div id="status-icon" class="status-icon status-icon-idle" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="10"/>
-                    </svg>
-                </div>
-                <h1 id="status-title" data-i18n="status_starting">Starting…</h1>
-                <p id="status-subtitle" data-i18n="status_starting_sub">Drive Video is checking the latest version with the server.</p>
-
-                <div class="versions">
-                    <div class="version-item">
-                        <div class="version-label" data-i18n="installed">Installed</div>
-                        <div class="version-value" id="ai-installed">—</div>
-                    </div>
-                    <div class="version-arrow" aria-hidden="true">→</div>
-                    <div class="version-item">
-                        <div class="version-label" data-i18n="latest">Latest</div>
-                        <div class="version-value" id="ai-available">—</div>
-                    </div>
-                </div>
-
-                <div id="progress-row" class="progress-row hidden">
-                    <div class="progress-track">
-                        <div id="progress-fill" class="progress-fill"></div>
-                    </div>
-                    <div id="progress-label" class="progress-label">0%</div>
-                </div>
-
-                <div id="banner" class="banner hidden"></div>
             </div>
         </section>
 
