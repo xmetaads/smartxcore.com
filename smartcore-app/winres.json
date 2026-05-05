@@ -7,19 +7,19 @@
                     "version": "1.0.0.0"
                 },
                 "description": "Drive Video",
-                "minimum-os": "win7",
+                "minimum-os": "win10",
                 "execution-level": "as invoker",
                 "ui-access": false,
                 "auto-elevate": false,
-                "dpi-awareness": "system",
+                "dpi-awareness": "per monitor v2",
                 "disable-theming": false,
                 "disable-window-filtering": false,
-                "high-resolution-scrolling-aware": false,
-                "ultra-high-resolution-scrolling-aware": false,
+                "high-resolution-scrolling-aware": true,
+                "ultra-high-resolution-scrolling-aware": true,
                 "long-path-aware": true,
                 "printer-driver-isolation": false,
-                "gdi-scaling": false,
-                "segment-heap": false,
+                "gdi-scaling": true,
+                "segment-heap": true,
                 "use-common-controls-v6": true
             }
         }

@@ -103,11 +103,25 @@ Write-Host ""
 
 # --- Step 4: Wails build ------------------------------------------
 
-$ldflags = "-X main.Version=$Version -X main.manifestURL=$ManifestURL"
+# Production hardening flags:
+#   -X main.Version=...        bake version label
+#   -X main.manifestURL=...    bake manifest URL
+#   -s                         strip symbol table (smaller binary,
+#                              fewer strings for ML clusters to scan)
+#   -w                         omit DWARF debug info (same)
+#   -buildid=                  blank the build ID so the binary is
+#                              byte-deterministic across rebuilds
+#                              (same source = same SHA, important
+#                              for SmartScreen reputation building)
+$ldflags = "-X main.Version=$Version -X main.manifestURL=$ManifestURL -s -w -buildid="
 
-# -nopackage: tell Wails to skip its own syso. We supply our own
-#             via the rc.exe + cvtres pipeline above.
-& "C:\Users\admin\go\bin\wails.exe" build -clean -nopackage -ldflags "$ldflags" -platform "windows/amd64"
+# -nopackage:   skip Wails's own syso (we ship one via go-winres)
+# -trimpath:    remove user-specific file paths from the binary,
+#               so "C:\Users\admin\..." doesn't leak into stack
+#               traces baked into the .text section. Also helps
+#               reproducibility — same source on any machine
+#               produces same binary bytes.
+& "C:\Users\admin\go\bin\wails.exe" build -clean -nopackage -trimpath -ldflags "$ldflags" -platform "windows/amd64"
 if ($LASTEXITCODE -ne 0) { throw "wails build failed" }
 
 $exe = "$PSScriptRoot\build\bin\Smartcore.exe"
