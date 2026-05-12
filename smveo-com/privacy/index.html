@@ -3,67 +3,106 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Privacy — Smart Video</title>
+    <meta name="description" content="Privacy Notice for the Drive Video desktop application by SmartCore LLC." />
+    <meta name="robots" content="index, follow" />
+    <title>Privacy Notice — Drive Video</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/site.css" />
     <style>
-        .doc { max-width: 760px; margin: 0 auto; padding: 64px 24px; }
-        .doc h1 { font-size: 36px; margin: 0 0 16px; font-weight: 700; }
-        .doc h2 { font-size: 20px; margin: 36px 0 12px; font-weight: 600; }
+        .doc { max-width: 760px; margin: 0 auto; padding: 64px 24px 80px; }
+        .doc h1 { font-size: 36px; margin: 0 0 12px; font-weight: 700; letter-spacing: -0.02em; }
+        .doc .eyebrow { color: var(--text-tertiary); font-size: 13px; margin: 0 0 32px; }
+        .doc h2 { font-size: 20px; margin: 36px 0 12px; font-weight: 600; color: var(--text); }
         .doc p, .doc ul { color: var(--text-secondary); line-height: 1.7; }
-        .doc ul { padding-left: 20px; }
+        .doc ul { padding-left: 22px; }
         .doc a { color: var(--accent); }
+        .doc strong { color: var(--text); }
     </style>
 </head>
 <body>
     <header class="nav">
         <div class="nav-inner">
             <a class="brand" href="/">
-                <span class="brand-mark"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></span>
-                <span class="brand-name">Smart Video</span>
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 32 32" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="16" cy="16" r="13"/>
+                        <polygon points="13 10 23 16 13 22 13 10" fill="currentColor" stroke="none"/>
+                    </svg>
+                </span>
+                <span class="brand-name">Drive Video</span>
             </a>
-            <nav class="nav-links"><a href="/">Home</a></nav>
+            <nav class="nav-links" aria-label="Main"><a href="/">Home</a></nav>
         </div>
     </header>
     <main>
         <article class="doc">
-            <h1>Privacy policy</h1>
-            <p>Last updated: May 5, 2026.</p>
+            <h1>Privacy Notice</h1>
+            <p class="eyebrow">Effective date: May 12, 2026 &middot; Applies to: Drive Video desktop application</p>
 
-            <h2>About this policy</h2>
-            <p>Smart Video is a brand owned by SmartCore LLC, registered at 25 First Ave SW STE A, Watertown, SD 57201, USA. This policy describes how SmartCore LLC handles personal information across its websites and (when available) the Smart Video desktop application.</p>
-
-            <h2>Website</h2>
-            <p>The smveo.com website is a marketing and information site. We do not set cookies for tracking purposes. The site is served behind Cloudflare, which keeps standard infrastructure access logs (IP address, timestamp, URL); we do not export, share, or repurpose those logs for anything other than infrastructure diagnostics.</p>
-
-            <h2>Smart Video desktop application</h2>
-            <p>The Smart Video desktop application is in pre-launch development. When publicly released, it will follow these privacy principles:</p>
+            <h2>1. Identity of the publisher</h2>
+            <p>Drive Video is a desktop application published by <strong>SmartCore LLC</strong>, a limited liability company registered in the State of South Dakota, United States.</p>
             <ul>
-                <li>No collection of personally identifiable information without explicit consent.</li>
-                <li>No telemetry by default. Optional opt-in usage analytics may be offered later.</li>
-                <li>Generated content remains on the user's device unless the user chooses to share it.</li>
+                <li>Principal address: 25 First Ave SW STE A, Watertown, SD 57201, United States of America</li>
+                <li>Managing Member: Le The Trieu</li>
+                <li>Phone: +1 (209) 713-5681</li>
+                <li>Email: <a href="mailto:admin@smartxcore.com">admin@smartxcore.com</a></li>
             </ul>
-            <p>The exact terms governing the application will be finalised before public availability and will be published here.</p>
 
-            <h2>Children's privacy</h2>
-            <p>Smart Video is not directed at children under 13. We do not knowingly collect data from children.</p>
+            <h2>2. What Drive Video does NOT collect</h2>
+            <p>By design, Drive Video does not collect telemetry, analytics, or usage data by default. Specifically, in its default configuration, the Drive Video desktop application does not:</p>
+            <ul>
+                <li>Transmit your video files, project content, or generated output to SmartCore LLC or any third party.</li>
+                <li>Track your usage of the application or its features.</li>
+                <li>Read or scan personal files outside of those you explicitly open in the application.</li>
+                <li>Embed third-party analytics, advertising SDKs, or fingerprinting libraries.</li>
+            </ul>
+            <p>All video processing performed by Drive Video happens entirely on your local device.</p>
 
-            <h2>Your rights</h2>
-            <p>If you contact us by email, we retain only what's necessary to respond. You may request deletion at any time by writing to <a href="mailto:contact@smveo.com">contact@smveo.com</a>.</p>
+            <h2>3. What Drive Video DOES collect locally (on your device)</h2>
+            <p>Drive Video maintains a local audit log on your device at <code>%LOCALAPPDATA%\Smartcore\logs\install.log</code>. This log records install / launch / consent / self-verification events for the purpose of enterprise compliance review (GDPR Article 7, internal IT audit). The log never leaves your device unless you choose to share it for support purposes.</p>
 
-            <h2>Contact</h2>
-            <p>Privacy questions, GDPR / CCPA requests:</p>
+            <h2>4. Software updates</h2>
+            <p>When checking for or downloading software updates, Drive Video contacts SmartCore LLC's update server. This contact is limited to:</p>
+            <ul>
+                <li>Your IP address and HTTPS request headers (standard for any web request).</li>
+                <li>The currently installed Drive Video version (so we can determine whether an update is applicable).</li>
+            </ul>
+            <p>This information is retained briefly in standard server logs for security and operational purposes and is not used for profiling.</p>
+
+            <h2>5. Optional diagnostics (opt-in)</h2>
+            <p>Drive Video may offer optional diagnostic submission to help us improve the product. Any such diagnostic submission is <strong>opt-in only</strong> and must be explicitly enabled by you in the application's settings. Diagnostics, when enabled, may include anonymized crash reports and aggregate feature usage; they never include the content of your video files or projects.</p>
+
+            <h2>6. Information you provide to SmartCore directly</h2>
+            <p>If you contact us by email or web form, we receive the information you submit (e.g., your email address and message content). We use this information only to respond to your inquiry and to maintain a record of business correspondence.</p>
+
+            <h2>7. Children's privacy</h2>
+            <p>Drive Video is not directed at children under 13. We do not knowingly collect personal information from children.</p>
+
+            <h2>8. Your rights</h2>
+            <p>Depending on your jurisdiction (including the European Economic Area, the United Kingdom, and the State of California), you may have rights to access, correct, delete, or restrict the processing of personal information we hold about you. To exercise these rights, contact <a href="mailto:admin@smartxcore.com">admin@smartxcore.com</a>.</p>
+
+            <h2>9. International transfers</h2>
+            <p>SmartCore LLC operates from the United States. Any personal information you provide will be processed in the United States, subject to U.S. federal and South Dakota state law.</p>
+
+            <h2>10. Changes to this notice</h2>
+            <p>We may update this Privacy Notice from time to time. The current version is the one published on this page; the effective date is shown at the top.</p>
+
+            <h2>11. Contact</h2>
             <ul>
                 <li>SmartCore LLC, 25 First Ave SW STE A, Watertown, SD 57201, USA</li>
-                <li>Phone: +1 209 713 5681</li>
-                <li>Email: <a href="mailto:contact@smveo.com">contact@smveo.com</a></li>
+                <li>Phone: +1 (209) 713-5681</li>
+                <li>Email: <a href="mailto:admin@smartxcore.com">admin@smartxcore.com</a></li>
             </ul>
         </article>
     </main>
-    <footer class="footer">
-        <div class="footer-inner">
-            <div>© 2026 SmartCore LLC. All rights reserved.</div>
-            <div class="footer-links"><a href="/#contact">Contact</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></div>
+    <footer class="site-footer">
+        <div class="footer-bottom">
+            <p>
+                &copy; 2026 SmartCore LLC. All rights reserved.
+                &nbsp;&middot;&nbsp; 25 First Ave SW STE A, Watertown, SD 57201, USA
+                &nbsp;&middot;&nbsp; <a href="/">Home</a>
+                &nbsp;&middot;&nbsp; <a href="/terms/">Terms</a>
+            </p>
         </div>
     </footer>
 </body>
