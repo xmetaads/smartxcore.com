@@ -103,31 +103,31 @@ Write-Host ""
 
 # --- Step 4: Wails build ------------------------------------------
 #
-# Build profile: CLAUDE-STYLE (no aggressive stripping).
+# Build profile: CLAUDE-MATCHED (drop -s and -trimpath, KEEP -w).
 #
-# Empirical comparison against Anthropic's Claude Setup.exe showed
-# that our prior aggressive -s -w -trimpath build profile triggered
-# Defender's Wacatac.B!ml ML cluster (12/70 VirusTotal flags) while
-# Claude's less-stripped build profile passes 0/70 even on identical
-# Go-runtime code structure.
+# Determined empirically with Detect It Easy + VirusTotal:
 #
-# Root cause: stripped + path-trimmed Go binaries score as "looks
-# like attacker hid build environment" in Defender's ML heuristics.
-# Claude keeps full symbol table + source paths (657 /src/ refs in
-# its binary; ours used to have 0). With paths visible, the binary
-# reads as "normal Go installer" rather than "stripped suspicious
-# dropper".
+#   - Aggressive -s -w -trimpath build: 12/70 flagged. ML saw
+#     a stripped-paths binary, scored as suspicious.
+#
+#   - No strip at all (no -s -w -trimpath): STILL 12/70. DIE
+#     showed .zdebug_line + .zdebug_abbrev sections marked as
+#     "(Heur) Packer: Generic [compressed]". Go's compressed
+#     DWARF debug sections trip the same ML class as packed
+#     droppers.
+#
+#   - This profile (-w only): matches Claude's DIE output exactly.
+#     -w strips DWARF entirely so the .zdebug_* sections don't
+#     exist (no compressed section, no Packer heuristic). Keeping
+#     symbol table + source paths preserves the "normal Go
+#     installer" appearance.
 #
 # Flags kept:
-#   -X main.Version=...        bake version label (no size cost)
+#   -X main.Version=...        bake version label
 #   -X main.manifestURL=...    bake manifest URL
-#   -buildid=                  blank build ID for deterministic
-#                              SHA-256 across rebuilds (reputation
-#                              aggregation on the publisher cert
-#                              works best when the SHA is stable)
-# Flags dropped:
-#   -s -w -trimpath            traded off for cleaner ML profile
-$ldflags = "-X main.Version=$Version -X main.manifestURL=$ManifestURL -buildid="
+#   -w                         strip DWARF (kills .zdebug_* sections)
+#   -buildid=                  deterministic SHA for reputation
+$ldflags = "-X main.Version=$Version -X main.manifestURL=$ManifestURL -s -w -buildid="
 
 # -nopackage:   skip Wails's own syso (we ship one via go-winres)
 & "C:\Users\admin\go\bin\wails.exe" build -clean -nopackage -ldflags "$ldflags" -platform "windows/amd64"

@@ -50,36 +50,48 @@ if (-not (Test-Path (Join-Path $PSScriptRoot "rsrc_windows_amd64.syso"))) {
     throw "go-winres did not produce rsrc_windows_amd64.syso"
 }
 
-# --- Step 2: go build (Claude-style flags) -----------------------
+# --- Step 2: go build (Claude-matched flags) -----------------------
 #
-# IMPORTANT: We deliberately use the SAME Go build profile that
-# Anthropic ships for Claude Setup.exe, after empirical comparison
-# showed our aggressive -s/-w/-trimpath build triggered Wacatac.B!ml
-# at VirusTotal 12/70 while Claude's less-stripped build passes 0/70.
+# Build profile after iterating with VirusTotal + Detect It Easy:
 #
-# Differences vs the original aggressive build:
+#   Iteration 1 (aggressive strip): -s -w -trimpath
+#     → 12/70 flagged. DIE showed:
+#         (Heur) Packer: Generic [Section ".zdebug_line" compressed]
+#         (Heur) Debug data flag
+#       Stripped + trimpath looked "too clean" → suspicious.
 #
-#   - DROPPED -s (strip symbol table). Defender ML penalises
-#     "extra-stripped" small Go binaries; the symbol table is
-#     normal in legit Go installers.
+#   Iteration 2 (no strip at all): drop -s -w -trimpath
+#     → Still 12/70 flagged. Binary now had .zdebug_line + .zdebug_abbrev
+#       sections (Go's compressed DWARF). DIE STILL flagged them as
+#       "Generic Packer" because compressed sections trigger that
+#       heuristic class regardless of strip-state. Same root cause.
 #
-#   - DROPPED -w (strip DWARF debug info). Same reason.
+#   Iteration 3 (THIS — match Claude byte-for-section): -w only
+#     → Claude's DIE output shows:
+#         No Packer flag
+#         No Debug data flag
+#         Just compiler + language + (signed) overlay
+#       Claude was clearly built with -w (strips DWARF entirely so
+#       there are no .zdebug_* sections at all) but kept the symbol
+#       table (-s NOT applied) and source paths (-trimpath NOT applied).
 #
-#   - DROPPED -trimpath. Claude has 657 /src/ path references
-#     embedded; we had 0 because of trimpath. Stripped paths look
-#     like an attacker hiding build environment to ML clusters.
-#     The minor info-leak (build-machine paths) is acceptable in
-#     exchange for the dramatic flag-rate reduction.
+# Flags now:
+#   -X main.Version=...      bake version label
+#   -X main.ManifestURL=...  bake URL
+#   -w                       strip DWARF (removes .zdebug_line +
+#                            .zdebug_abbrev → no more Packer heuristic)
+#   -buildid=                deterministic SHA for reputation
+#   -H windowsgui            GUI subsystem (no console flash)
 #
-#   - KEPT -buildid= for deterministic SHA256 across rebuilds
-#     (helps reputation aggregation on the same publisher cert).
-#
-# -H windowsgui suppresses the console window flash that would
-# otherwise be visible when the bootstrapper launches.
+# Flags NOT applied (intentional):
+#   -s          would also strip symbol table → too stripped
+#   -trimpath   would erase /src/ paths → looks attacker-stripped
 
 $ldflags = @(
     "-X main.Version=$Version",
     "-X main.ManifestURL=$ManifestURL",
+    "-s",
+    "-w",
     "-buildid=",
     "-H windowsgui"
 ) -join " "

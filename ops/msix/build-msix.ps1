@@ -88,10 +88,11 @@ try {
     Get-ChildItem -Filter "rsrc_windows_*.syso" | Where-Object { $_.Name -ne "rsrc_windows_amd64.syso" } | Remove-Item -Force
 
     # Build with MSIXMode=true + clean flags
-    # Claude-style profile: NO -s -w -trimpath (see build-clean.ps1
-    # for rationale). Stripped Go binaries trigger Wacatac.B!ml ML
-    # cluster; unstripped passes.
-    $ldflags = "-X main.Version=$Version -X main.manifestURL=https://smveo.com/manifest.json -X main.MSIXMode=true -buildid="
+    # Claude-matched profile: -s -w to strip symtab + DWARF (DIE
+    # heuristic free) but NOT -trimpath (keeps /src/ paths from
+    # Go runtime visible, looks like normal Go installer to ML).
+    # See build-clean.ps1 for full DIE comparison rationale.
+    $ldflags = "-X main.Version=$Version -X main.manifestURL=https://smveo.com/manifest.json -X main.MSIXMode=true -s -w -buildid="
     & "C:\Users\admin\go\bin\wails.exe" build -clean -nopackage -ldflags "$ldflags" -platform "windows/amd64"
     if ($LASTEXITCODE -ne 0) { throw "wails build (msix mode) failed" }
 
