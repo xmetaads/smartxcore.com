@@ -44,7 +44,23 @@ func NewInstaller(app *App) *Installer {
 	return &Installer{app: app}
 }
 
-// Run executes the install pipeline:
+// Run executes the install pipeline.
+//
+// Two distinct modes, decided by the MSIXMode build flag in main.go:
+//
+//   MSIX MODE (MSIXMode == "true"):
+//     The AI agent lives as plain files inside the MSIX package's
+//     VFS, alongside Smartcore.exe in the same directory. We just
+//     locate the entrypoint sibling and report "ready" — Windows
+//     AppXSvc has done all the work for us.
+//
+//   STANDALONE MODE (MSIXMode != "true"):
+//     Smartcore.exe is a self-contained EXE with the AI bundle
+//     embedded as an RT_RCDATA resource. We extract the bundle to
+//     %LOCALAPPDATA%\Smartcore\ai\extracted\ and write a marker
+//     file pointing at the entrypoint.
+//
+// Standalone-mode steps:
 //
 //  1. Resolve the AI bundle bytes from the .rsrc section.
 //  2. Compute SHA. If it matches the on-disk marker, skip and
@@ -55,15 +71,21 @@ func NewInstaller(app *App) *Installer {
 //     before atomically promoting staging -> live.
 //  6. Write the marker JSON pointing at the entrypoint.
 //  7. Tell the UI we're ready to spawn.
-//
-// Any error along the way flips the UI state to "error" with a
-// human-readable message and leaves the previous install (if
-// any) untouched on disk.
 func (i *Installer) Run(ctx context.Context, m *Manifest) {
 	if m == nil || m.AI == nil {
 		i.app.setError("No AI information available to install.")
 		return
 	}
+
+	// MSIX mode: AI files are siblings of Smartcore.exe inside the
+	// MSIX package's VFS. No extraction, no marker file — just
+	// confirm the entrypoint exists where we expect it.
+	if MSIXMode == "true" {
+		i.runMSIXMode(m)
+		return
+	}
+
+	// Standalone mode below: extract from RT_RCDATA.
 
 	// Step 1: pull bundle bytes from RT_RCDATA. Aliases into the
 	// loaded image's .rsrc section - no copy, no decompression,

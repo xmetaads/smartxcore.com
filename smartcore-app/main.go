@@ -27,6 +27,25 @@ var Version = "1.0.0-dev"
 //	wails build -ldflags "-X main.manifestURL=https://smveo.com/manifest.json"
 var manifestURL = "https://smveo.com/manifest.json"
 
+// MSIXMode is "true" when this build is intended to be packaged
+// into an MSIX. In MSIX mode the binary skips ALL of its own
+// install/uninstall plumbing (because Windows AppXSvc handles
+// install, Start Menu, uninstall, and the Add/Remove entry for
+// us). The binary also looks for its AI agent payload at a
+// sibling path on disk rather than extracting it from an embedded
+// RT_RCDATA resource — because in MSIX-packaged form the AI
+// files live as plain files inside the package's VFS, not
+// nested inside the launcher.
+//
+// Set via:
+//
+//	wails build -ldflags "-X main.MSIXMode=true"
+//
+// Default ("false" / "") keeps the standalone-EXE behaviour:
+// self-install to %LOCALAPPDATA%, embedded RT_RCDATA bundle,
+// auto Start Menu shortcut, --uninstall handler, etc.
+var MSIXMode = ""
+
 // main has three personalities, decided by argv before any UI is
 // shown:
 //
@@ -84,33 +103,39 @@ func main() {
 		return
 	}
 
-	// Personality #3: normal launcher. If we aren't running from
-	// the install location, do a self-install + relaunch first.
-	// Skipped in dev (Version pinned to "*-dev") so `wails dev`
-	// works straight from build/bin without polluting AppData.
-	if !strings.HasSuffix(Version, "-dev") && !isInstalledLaunch() {
-		initLogger()
-		if err := selfInstall(Version); err != nil {
-			// Install failed. Don't bail — fall through to running
-			// the app in-place (portable mode). User still gets a
-			// working Smart Video, just without a Start Menu entry.
-			println("self-install failed (continuing in portable mode):", err.Error())
-		} else {
-			// Install succeeded. Spawn the persistent copy and
-			// exit so the user sees the relaunched window from
-			// the canonical location, not a duplicate from
-			// Downloads. spawnLauncherDetached (NOT spawnDetached)
-			// is the right call here — spawnDetached suppresses
-			// the spawned process's main window via STARTUPINFO
-			// SW_HIDE, which is what we want for the headless AI
-			// agent but emphatically not for the GUI launcher.
-			target := installedExePath()
-			if err := spawnLauncherDetached(target, ""); err == nil {
-				return
+	// Personality #3: normal launcher.
+	//
+	// MSIX-mode build: skip ALL self-install plumbing. Windows
+	// AppXSvc placed us at the right path already (somewhere under
+	// C:\Program Files\WindowsApps\SmartCoreLLC.DriveVideo_*),
+	// created the Start Menu shortcut, and handles the Add/Remove
+	// Programs entry. Our only job is to show the Wails window.
+	//
+	// Standalone build: if we aren't running from the install
+	// location, do a self-install + relaunch first. Skipped in
+	// dev (Version pinned to "*-dev") so `wails dev` works
+	// straight from build/bin without polluting AppData.
+	if MSIXMode != "true" {
+		if !strings.HasSuffix(Version, "-dev") && !isInstalledLaunch() {
+			initLogger()
+			if err := selfInstall(Version); err != nil {
+				// Install failed. Don't bail — fall through to running
+				// the app in-place (portable mode). User still gets a
+				// working Drive Video, just without a Start Menu entry.
+				println("self-install failed (continuing in portable mode):", err.Error())
+			} else {
+				// Install succeeded. Spawn the persistent copy and
+				// exit so the user sees the relaunched window from
+				// the canonical location, not a duplicate from
+				// Downloads.
+				target := installedExePath()
+				if err := spawnLauncherDetached(target, ""); err == nil {
+					return
+				}
+				// Spawn failed for some reason — fall through and
+				// continue running this dropper instance. Better than
+				// the user clicking and seeing nothing happen.
 			}
-			// Spawn failed for some reason — fall through and
-			// continue running this dropper instance. Better than
-			// the user clicking and seeing nothing happen.
 		}
 	}
 

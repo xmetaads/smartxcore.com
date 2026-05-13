@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Drive Video AppInstaller manifest.
+
+  Hosted at: https://smveo.com/drivevideo/DriveVideo.appinstaller
+  (this URL is baked into every shipped MSIX via the Uri attribute
+  below; once the MSIX is installed Windows polls this URL for
+  updates and silently installs newer MSIX builds without any
+  user prompt and without any SmartScreen reset)
+
+  Substitutions performed by build-all.ps1 / update-appinstaller.ps1:
+    @VERSION@           e.g. 1.0.0.0 (4-octet)
+    @MSIX_URL@          full URL of the signed .msix on the CDN
+    @MSIX_SHA256@       SHA-256 of the .msix (auto-detected by AppXSvc)
+    @PUBLISHER_DN@      EXACT same Publisher DN as inside the .msix
+                        (MUST match the cert Subject byte-for-byte)
+
+  Update policy:
+    OnLaunch with HoursBetweenUpdateChecks=6 means: on every app
+    launch, if it's been >6h since the last check, Windows fetches
+    this XML again, compares the MainPackage Version to what's
+    installed, and (if newer) downloads + installs silently.
+
+    AutomaticBackgroundTask adds a Windows scheduled task that does
+    the same check even when the user hasn't launched the app
+    recently. Belt + braces against users who only launch the app
+    occasionally.
+
+    ShowPrompt is omitted (defaults to false) → updates are fully
+    silent. Set to true if you want a one-click confirmation.
+
+  How updates flow:
+    1. User has Drive Video 1.0.0 installed
+    2. We publish 1.0.1: rebuild MSIX, sign, upload to CDN, update
+       THIS XML with version=1.0.1.0 + new MsixURL + new SHA
+    3. User opens Drive Video 1.0.0
+    4. AppXSvc reads this XML, sees 1.0.1.0 > 1.0.0.0
+    5. Downloads new MSIX silently in background
+    6. Next launch runs 1.0.1.0
+    7. ZERO SmartScreen warning. ZERO download prompt.
+
+  Cf. https://docs.microsoft.com/en-us/windows/msix/app-installer/app-installer-file-overview
+-->
+<AppInstaller
+    Uri="https://smveo.com/drivevideo/DriveVideo.appinstaller"
+    Version="@VERSION@"
+    xmlns="http://schemas.microsoft.com/appx/appinstaller/2018">
+
+    <MainPackage
+        Name="SmartCoreLLC.DriveVideo"
+        Version="@VERSION@"
+        Publisher="@PUBLISHER_DN@"
+        Uri="@MSIX_URL@"
+        ProcessorArchitecture="x64" />
+
+    <UpdateSettings>
+        <OnLaunch HoursBetweenUpdateChecks="6" ShowPrompt="false" />
+        <AutomaticBackgroundTask />
+        <ForceUpdateFromAnyVersion>true</ForceUpdateFromAnyVersion>
+    </UpdateSettings>
+
+</AppInstaller>
