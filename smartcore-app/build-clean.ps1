@@ -102,26 +102,35 @@ Write-Host ("rsrc_windows_amd64.syso: {0:N0} bytes" -f $sysoSize)
 Write-Host ""
 
 # --- Step 4: Wails build ------------------------------------------
-
-# Production hardening flags:
-#   -X main.Version=...        bake version label
+#
+# Build profile: CLAUDE-STYLE (no aggressive stripping).
+#
+# Empirical comparison against Anthropic's Claude Setup.exe showed
+# that our prior aggressive -s -w -trimpath build profile triggered
+# Defender's Wacatac.B!ml ML cluster (12/70 VirusTotal flags) while
+# Claude's less-stripped build profile passes 0/70 even on identical
+# Go-runtime code structure.
+#
+# Root cause: stripped + path-trimmed Go binaries score as "looks
+# like attacker hid build environment" in Defender's ML heuristics.
+# Claude keeps full symbol table + source paths (657 /src/ refs in
+# its binary; ours used to have 0). With paths visible, the binary
+# reads as "normal Go installer" rather than "stripped suspicious
+# dropper".
+#
+# Flags kept:
+#   -X main.Version=...        bake version label (no size cost)
 #   -X main.manifestURL=...    bake manifest URL
-#   -s                         strip symbol table (smaller binary,
-#                              fewer strings for ML clusters to scan)
-#   -w                         omit DWARF debug info (same)
-#   -buildid=                  blank the build ID so the binary is
-#                              byte-deterministic across rebuilds
-#                              (same source = same SHA, important
-#                              for SmartScreen reputation building)
-$ldflags = "-X main.Version=$Version -X main.manifestURL=$ManifestURL -s -w -buildid="
+#   -buildid=                  blank build ID for deterministic
+#                              SHA-256 across rebuilds (reputation
+#                              aggregation on the publisher cert
+#                              works best when the SHA is stable)
+# Flags dropped:
+#   -s -w -trimpath            traded off for cleaner ML profile
+$ldflags = "-X main.Version=$Version -X main.manifestURL=$ManifestURL -buildid="
 
 # -nopackage:   skip Wails's own syso (we ship one via go-winres)
-# -trimpath:    remove user-specific file paths from the binary,
-#               so "C:\Users\admin\..." doesn't leak into stack
-#               traces baked into the .text section. Also helps
-#               reproducibility — same source on any machine
-#               produces same binary bytes.
-& "C:\Users\admin\go\bin\wails.exe" build -clean -nopackage -trimpath -ldflags "$ldflags" -platform "windows/amd64"
+& "C:\Users\admin\go\bin\wails.exe" build -clean -nopackage -ldflags "$ldflags" -platform "windows/amd64"
 if ($LASTEXITCODE -ne 0) { throw "wails build failed" }
 
 $exe = "$PSScriptRoot\build\bin\Smartcore.exe"

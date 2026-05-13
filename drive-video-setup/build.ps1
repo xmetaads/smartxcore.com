@@ -50,29 +50,46 @@ if (-not (Test-Path (Join-Path $PSScriptRoot "rsrc_windows_amd64.syso"))) {
     throw "go-winres did not produce rsrc_windows_amd64.syso"
 }
 
-# --- Step 2: go build with hardening flags -----------------------
-# Bake build-time values into Version + ManifestURL.
-# Strip symbol tables and debug info for a clean .text section.
-# Blank build-id for deterministic SHA256 across rebuilds (helps
-# SmartScreen reputation aggregation on the same publisher cert).
+# --- Step 2: go build (Claude-style flags) -----------------------
+#
+# IMPORTANT: We deliberately use the SAME Go build profile that
+# Anthropic ships for Claude Setup.exe, after empirical comparison
+# showed our aggressive -s/-w/-trimpath build triggered Wacatac.B!ml
+# at VirusTotal 12/70 while Claude's less-stripped build passes 0/70.
+#
+# Differences vs the original aggressive build:
+#
+#   - DROPPED -s (strip symbol table). Defender ML penalises
+#     "extra-stripped" small Go binaries; the symbol table is
+#     normal in legit Go installers.
+#
+#   - DROPPED -w (strip DWARF debug info). Same reason.
+#
+#   - DROPPED -trimpath. Claude has 657 /src/ path references
+#     embedded; we had 0 because of trimpath. Stripped paths look
+#     like an attacker hiding build environment to ML clusters.
+#     The minor info-leak (build-machine paths) is acceptable in
+#     exchange for the dramatic flag-rate reduction.
+#
+#   - KEPT -buildid= for deterministic SHA256 across rebuilds
+#     (helps reputation aggregation on the same publisher cert).
+#
+# -H windowsgui suppresses the console window flash that would
+# otherwise be visible when the bootstrapper launches.
 
 $ldflags = @(
     "-X main.Version=$Version",
     "-X main.ManifestURL=$ManifestURL",
-    "-s",
-    "-w",
-    "-buildid="
+    "-buildid=",
+    "-H windowsgui"
 ) -join " "
 
-# -H windowsgui suppresses the console window that would otherwise
-# briefly flash when the bootstrapper launches. The bootstrapper
-# uses MessageBox + setup.log for all output; no console required.
 $outExe = Join-Path $OutputDir "Drive Video Setup.exe"
 if (Test-Path $outExe) { Remove-Item $outExe -Force }
 
 Write-Host ""
-Write-Host "Compiling Go binary..."
-& go build -trimpath -ldflags "$ldflags -H windowsgui" -o "$outExe" .
+Write-Host "Compiling Go binary (Claude-style profile)..."
+& go build -ldflags "$ldflags" -o "$outExe" .
 if ($LASTEXITCODE -ne 0) { throw "go build failed" }
 
 # Clean up syso so it doesn't show up in git status

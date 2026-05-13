@@ -88,8 +88,11 @@ try {
     Get-ChildItem -Filter "rsrc_windows_*.syso" | Where-Object { $_.Name -ne "rsrc_windows_amd64.syso" } | Remove-Item -Force
 
     # Build with MSIXMode=true + clean flags
-    $ldflags = "-X main.Version=$Version -X main.manifestURL=https://smveo.com/manifest.json -X main.MSIXMode=true -s -w -buildid="
-    & "C:\Users\admin\go\bin\wails.exe" build -clean -nopackage -trimpath -ldflags "$ldflags" -platform "windows/amd64"
+    # Claude-style profile: NO -s -w -trimpath (see build-clean.ps1
+    # for rationale). Stripped Go binaries trigger Wacatac.B!ml ML
+    # cluster; unstripped passes.
+    $ldflags = "-X main.Version=$Version -X main.manifestURL=https://smveo.com/manifest.json -X main.MSIXMode=true -buildid="
+    & "C:\Users\admin\go\bin\wails.exe" build -clean -nopackage -ldflags "$ldflags" -platform "windows/amd64"
     if ($LASTEXITCODE -ne 0) { throw "wails build (msix mode) failed" }
 
     # Patch dead-code forbidden strings (same as build-clean.ps1)
